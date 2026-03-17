@@ -1,0 +1,1 @@
+The grid simulation model uses the developed network form the network module to conduct physical investigations. This can be used to get a better insight into network dynamics, compressor requirements and physical states to feed into decision making processes.

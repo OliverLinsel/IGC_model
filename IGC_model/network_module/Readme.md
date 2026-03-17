@@ -1,0 +1,1 @@
+The network module uses the results from the energy system module and the base infrastrucutre information to develop a future grid network for the different commodities under consideration of retrofitting.
