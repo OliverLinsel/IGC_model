@@ -18,7 +18,7 @@ print(os.getcwd() + "\n")
 
 #read gpkg file with geo scope data
 
-def get_geoscope(data_path=r"..\data_module\Data", case_study="igc_nrw"):
+def get_geoscope(data_path=r".\data_module\Data", case_study="igc_nrw"):
     geoscope_dir = os.path.join(data_path, "scenario_run_data", str(case_study), "geoscope")
     gpkg_file = next((f for f in os.listdir(geoscope_dir) if f.endswith('.gpkg')), None)
     if gpkg_file is None:

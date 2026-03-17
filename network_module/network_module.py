@@ -28,7 +28,7 @@ print('Execute in Directory:')
 print(os.getcwd() + "\n")
 
 #Define the paths
-data_path = r"..\data_module\Data"
+data_path = r".\data_module\Data"
 output_path = r"output"
 
 #get geoscope

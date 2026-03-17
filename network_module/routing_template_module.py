@@ -23,7 +23,7 @@ START = time.perf_counter()
 print('Execute in Directory:')
 print(os.getcwd() + "\n")
 
-def read_all_existing_pipelines(data_path=r"..\data_module\Data", case_study="igc_nrw"):
+def read_all_existing_pipelines(data_path=r".\data_module\Data", case_study="igc_nrw"):
     geoscope_dir = os.path.join(data_path, "scenario_run_data", str(case_study), "routing_template", "potential_retrofit_pipelines")
     #loop for all files that are geopackages, read them as gdf and concatenate them to one gdf
     potential_retrofit_routes_gdf = gpd.GeoDataFrame()
@@ -38,7 +38,7 @@ def read_all_existing_pipelines(data_path=r"..\data_module\Data", case_study="ig
         raise FileNotFoundError(f"No .gpkg files found in {geoscope_dir}")
     return potential_retrofit_routes_gdf
 
-def read_all_potential_grids(data_path=r"..\data_module\Data", case_study="igc_nrw"):
+def read_all_potential_grids(data_path=r".\data_module\Data", case_study="igc_nrw"):
     geoscope_dir = os.path.join(data_path, "scenario_run_data", str(case_study), "routing_template", "potential_routes")
     #loop for all files that are geopackages, read them as gdf and concatenate them to one gdf
     potential_routes_gdf = gpd.GeoDataFrame()
@@ -58,7 +58,7 @@ def combine_and_process_routes(potential_retrofit_routes_gdf, potential_routes_g
     #dissolve all geometries to one geometry to create a routing template that covers the entire geoscope
     routing_template_gdf = geometries_gdf.dissolve()
     print(str(routing_template_gdf) + "\n")
-    visualize_routing_template(routing_template_gdf)
+    # visualize_routing_template(routing_template_gdf)
     #simplify the routing template geometry to reduce the complexity of the network
     routing_template_gdf["geometry"] = routing_template_gdf["geometry"].simplify(tolerance=default_simplify_tolerance)
     visualize_routing_template(routing_template_gdf)
@@ -70,7 +70,7 @@ def visualize_routing_template(routing_template_gdf):
     plt.show()
     return
 
-def get_routing_template(data_path=r"..\data_module\Data", case_study="igc_nrw"):
+def get_routing_template(data_path=r".\data_module\Data", case_study="igc_nrw"):
     #read all existing pipelines and potential grids, visualize them and return them as a gdf
     potential_retrofit_routes_gdf = read_all_existing_pipelines()
     potential_routes_gdf = read_all_potential_grids()

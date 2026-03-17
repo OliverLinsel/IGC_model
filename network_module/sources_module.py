@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 
 #delete after development
 case_study = "igc_nrw"
-data_path = r"..\data_module\Data"
+data_path = r".\data_module\Data"
 output_path = r"output"
 #end of delete after development
 
@@ -53,7 +53,7 @@ def visualize_sources(sources_data):
     plt.show()
     return
 
-def get_sources(data_path=r"..\data_module\Data", case_study="igc_nrw"):
+def get_sources(data_path=r".\data_module\Data", case_study="igc_nrw"):
     emissions_dir = os.path.join(data_path, "scenario_run_data", str(case_study), "emissions")
     #test if there is a spreadsheet or a geospatial data file in the emissions directory and call the corresponding function to get the sources. If there are both, prioritize the geospatial data file. If there are none, raise an error.
     spreadsheet_file = next((f for f in os.listdir(emissions_dir) if f.endswith('.xlsx')), None)
