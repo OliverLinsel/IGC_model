@@ -1,2 +1,7 @@
 # IGC_model
 This is the model repository for the IGC NRW research project.
+
+The IGC.NRW (Infrastructure development for green gases and CO2 in North Rhine-Westphalia (NRW) with a view to a climate-neutral Germany) project is a collaborative effort involving the Ruhr-University Bochum, the University of Duisburg-Essen, HiScience GmbH and Thyssengas GmbH, aiming to further develop and concretize the infrastructure for green gases and CO2 in North Rhine-Westphalia (NRW). This includes linking various sectors such as electricity, hydrogen, natural gas, biogas and CO2 in line with the overarching strategies for defossilization and carbon management. To ensure a practice-oriented development, a common data basis is being created togehter with relevant stakeholders from various industrial secotors, such as the chemical industry and the lime and cement industry. Based on this, a sector-integrated system model is being developed. The linking of the various sectors enables the examination of closed material cycles and potential synergies. This also takes into account existing and planned transport infrastructures, allowing for the consideration of repurposing strategies for existing gas networks and a realistic assessment. By utilizing and further developing scientific analysis and modeling methods, results can be achieved that contribute to a more detailed overall strategy for the defossilization of industry in North Rhine-Westphalia.
+
+More information and the most recent news:
+https://igc.nrw/
