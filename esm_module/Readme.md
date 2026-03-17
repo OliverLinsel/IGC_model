@@ -1,0 +1,1 @@
+In this module the energy system model is being developed, handeled, processed, analyzed and visualized. It contains the preparation of data from the data module to fit the requirements of the ESM framework and manage the optimization execution including the results.

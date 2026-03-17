@@ -1,0 +1,1 @@
+The market module is an optional modell that may enable and enhance additional economic considerations including investment analysis, robustness and risk of decisions as well as trading partnerships.

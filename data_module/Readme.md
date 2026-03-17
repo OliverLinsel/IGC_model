@@ -1,0 +1,1 @@
+In this module the datasets that are needed for the other modules are handled. The main goal is to develop a database and API to remotely get data from the server
