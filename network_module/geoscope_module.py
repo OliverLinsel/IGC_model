@@ -11,6 +11,7 @@ import geopandas as gpd
 # import plotly.express as px
 import matplotlib.pyplot as plt
 
+epsg="3035"
 START = time.perf_counter() 
 
 print('Execute in Directory:')
@@ -24,10 +25,12 @@ def get_geoscope(data_path=r".\data_module\Data", case_study="igc_nrw"):
     if gpkg_file is None:
         raise FileNotFoundError(f"No .gpkg file found in {geoscope_dir}")
     geoscope_gdf_high_res = gpd.read_file(os.path.join(geoscope_dir, gpkg_file))
+    #to crs
+    geoscope_gdf_high_res = geoscope_gdf_high_res.to_crs(epsg=epsg)
     #unite all geometries to one geometry to determine the maximum area scope
     geoscope_gdf_agg = geoscope_gdf_high_res.dissolve()
     #only keep geometry column in the aggregated geoscope gdf
-    geoscope_gdf_agg = geoscope_gdf_agg[["geometry"]]
+    geoscope_gdf_agg = geoscope_gdf_agg[["geometry"]].set_crs(epsg=epsg)
     return geoscope_gdf_high_res, geoscope_gdf_agg
 
 def visualize_geoscope(geoscope_gdf):

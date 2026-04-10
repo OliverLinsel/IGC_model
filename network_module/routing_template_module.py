@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 
 #delete after development
 case_study = "igc_nrw"
-data_path = r"..\data_module\Data"
+data_path = r".\data_module\Data"
 output_path = r"output"
 epsg="3035"
 default_simplify_tolerance = 1000
@@ -54,15 +54,15 @@ def read_all_potential_grids(data_path=r".\data_module\Data", case_study="igc_nr
     return potential_routes_gdf
 
 def combine_and_process_routes(potential_retrofit_routes_gdf, potential_routes_gdf):
-    geometries_gdf = pd.concat([potential_retrofit_routes_gdf[["geometry"]], potential_routes_gdf[["geometry"]]], ignore_index=True)
+    geometries_df = pd.concat([potential_retrofit_routes_gdf[["geometry"]], potential_routes_gdf[["geometry"]]], ignore_index=True)
+    geometries_gdf = geometries_df.set_geometry("geometry")
+    geometries_gdf = geometries_gdf.set_crs(epsg=epsg).reset_index(drop=True)
     #dissolve all geometries to one geometry to create a routing template that covers the entire geoscope
     routing_template_gdf = geometries_gdf.dissolve()
     print(str(routing_template_gdf) + "\n")
-    # visualize_routing_template(routing_template_gdf)
     #simplify the routing template geometry to reduce the complexity of the network
     routing_template_gdf["geometry"] = routing_template_gdf["geometry"].simplify(tolerance=default_simplify_tolerance)
-    visualize_routing_template(routing_template_gdf)
-    return
+    return routing_template_gdf
 
 def visualize_routing_template(routing_template_gdf):
     routing_template_gdf['index'] = routing_template_gdf.index
@@ -72,14 +72,12 @@ def visualize_routing_template(routing_template_gdf):
 
 def get_routing_template(data_path=r".\data_module\Data", case_study="igc_nrw"):
     #read all existing pipelines and potential grids, visualize them and return them as a gdf
-    potential_retrofit_routes_gdf = read_all_existing_pipelines()
-    potential_routes_gdf = read_all_potential_grids()
-    combine_and_process_routes(potential_retrofit_routes_gdf, potential_routes_gdf)
-    return potential_retrofit_routes_gdf, potential_routes_gdf
+    potential_retrofit_routes_gdf = read_all_existing_pipelines(data_path, case_study)
+    potential_routes_gdf = read_all_potential_grids(data_path, case_study)
+    routing_template_gdf = combine_and_process_routes(potential_retrofit_routes_gdf, potential_routes_gdf)
+    return routing_template_gdf, potential_retrofit_routes_gdf, potential_routes_gdf
 
-test_a, test_b = get_routing_template()
-print(str(test_a) + "\n")
-print(str(test_a) + "\n")
+routing_template_gdf, retrofit_routes_gdf, potential_routes_gdf = get_routing_template(data_path, case_study)
 
 STOP = time.perf_counter()
 print('Total execution time of script',round((STOP-START), 1), 's')
