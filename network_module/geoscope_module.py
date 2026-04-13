@@ -10,6 +10,7 @@ import pandas as pd
 import geopandas as gpd
 # import plotly.express as px
 import matplotlib.pyplot as plt
+from setup import get_system_path
 
 epsg="3035"
 START = time.perf_counter() 
@@ -18,9 +19,8 @@ print('Execute in Directory:')
 print(os.getcwd() + "\n")
 
 #read gpkg file with geo scope data
-
-def get_geoscope(data_path=r".\data_module\Data", case_study="igc_nrw"):
-    geoscope_dir = os.path.join(data_path, "scenario_run_data", str(case_study), "geoscope")
+def get_geoscope(data_path=os.path.join("data_module", "Data"), case_study="igc_nrw"):
+    geoscope_dir = get_system_path(data_path, "scenario_run_data", case_study, "geoscope")
     gpkg_file = next((f for f in os.listdir(geoscope_dir) if f.endswith('.gpkg')), None)
     if gpkg_file is None:
         raise FileNotFoundError(f"No .gpkg file found in {geoscope_dir}")

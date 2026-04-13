@@ -6,6 +6,7 @@
 
 import time
 import os
+from setup import get_system_path
 
 #delete after development
 case_study = "igc_nrw"

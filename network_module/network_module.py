@@ -11,13 +11,13 @@ import geopandas as gpd
 import networkx as nx
 from scipy.spatial import cKDTree
 import numpy as np
-import networkx as nx
 from networkx.algorithms.approximation import steiner_tree
 from shapely.geometry import LineString, Point, MultiLineString
 from tqdm import tqdm
 from pyproj import CRS
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from setup import get_system_path
 
 #Define module parameters:
 retrofit_cost_factor = 0.8
@@ -33,7 +33,8 @@ print('Execute in Directory:')
 print(os.getcwd() + "\n")
 
 #Define the paths
-data_path = r".\data_module\Data"
+data_path = os.path.join("data_module", "Data")
+# data_path = get_system_path(data_path)
 output_path = r"output"
 
 # Define the path to the TEMP subdirectory

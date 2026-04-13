@@ -9,6 +9,7 @@ import os
 import pandas as pd
 import geopandas as gpd
 import matplotlib.pyplot as plt
+from setup import get_system_path
 
 #delete after development
 case_study = "igc_nrw"
@@ -23,8 +24,8 @@ START = time.perf_counter()
 print('Execute in Directory:')
 print(os.getcwd() + "\n")
 
-def read_all_existing_pipelines(data_path=r".\data_module\Data", case_study="igc_nrw"):
-    geoscope_dir = os.path.join(data_path, "scenario_run_data", str(case_study), "routing_template", "potential_retrofit_pipelines")
+def read_all_existing_pipelines(data_path=os.path.join("data_module", "Data"), case_study="igc_nrw"):
+    geoscope_dir = get_system_path(data_path, "scenario_run_data", case_study, "routing_template", "potential_retrofit_pipelines")
     #loop for all files that are geopackages, read them as gdf and concatenate them to one gdf
     potential_retrofit_routes_gdf = gpd.GeoDataFrame()
     for file in os.listdir(geoscope_dir):
@@ -38,8 +39,8 @@ def read_all_existing_pipelines(data_path=r".\data_module\Data", case_study="igc
         raise FileNotFoundError(f"No .gpkg files found in {geoscope_dir}")
     return potential_retrofit_routes_gdf
 
-def read_all_potential_grids(data_path=r".\data_module\Data", case_study="igc_nrw"):
-    geoscope_dir = os.path.join(data_path, "scenario_run_data", str(case_study), "routing_template", "potential_routes")
+def read_all_potential_grids(data_path=os.path.join("data_module", "Data"), case_study="igc_nrw"):
+    geoscope_dir = get_system_path(data_path, "scenario_run_data", case_study, "routing_template", "potential_routes")
     #loop for all files that are geopackages, read them as gdf and concatenate them to one gdf
     potential_routes_gdf = gpd.GeoDataFrame()
     for file in os.listdir(geoscope_dir):

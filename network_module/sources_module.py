@@ -9,6 +9,7 @@ import os
 import pandas as pd
 import geopandas as gpd
 import matplotlib.pyplot as plt
+from setup import get_system_path
 
 #delete after development
 case_study = "igc_nrw"
@@ -43,7 +44,7 @@ def get_sources_from_database(database_connection_info):
     return
 
 def assign_sources_to_scenarios_and_sectors(sources_data_op_gdf):
-    sector_def_df = pd.read_excel(os.path.join(data_path, "scenario_run_data", str(case_study), "emissions", "nace_definitions", "nace_definitions.xlsx"))
+    sector_def_df = pd.read_excel(get_system_path(data_path, "scenario_run_data", case_study, "emissions", "nace_definitions", "nace_definitions.xlsx"))
     sector_def_df = sector_def_df.dropna(subset=["scenario"]).dropna(subset=["color"])
     sector_def_df = sector_def_df.rename(columns={"NACE Rev. 2.1 Heading": "Sector"})
 
@@ -84,8 +85,11 @@ def visualize_sources(sources_data):
     plt.show()
     return
 
-def get_sources(data_path=r".\data_module\Data", case_study="igc_nrw"):
-    emissions_dir = os.path.join(data_path, "scenario_run_data", str(case_study), "emissions")
+def read_all_existing_pipelines(data_path=os.path.join("data_module", "Data"), case_study="igc_nrw"):
+    geoscope_dir = get_system_path(data_path, "scenario_run_data", case_study, "routing_template", "potential_retrofit_pipelines")
+
+def get_sources(data_path=os.path.join("data_module", "Data"), case_study="igc_nrw"):
+    emissions_dir = get_system_path(data_path, "scenario_run_data", case_study, "emissions")
     #test if there is a spreadsheet or a geospatial data file in the emissions directory and call the corresponding function to get the sources. If there are both, prioritize the geospatial data file. If there are none, raise an error.
     spreadsheet_file = next((f for f in os.listdir(emissions_dir) if f.endswith('.xlsx')), None)
     geospatial_file = next((f for f in os.listdir(emissions_dir) if f.endswith('.gpkg')), None)
