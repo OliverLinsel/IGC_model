@@ -1,4 +1,4 @@
-##### network_module #####
+##### sources_module #####
 #orginated by OL 10.03.2026
 
 #This is the network module created for the IGC.NRW research project. It is subdivided into four submodules: Determining the geoscope, Creating the path template, creating the sources and creating the sinks.
@@ -82,7 +82,8 @@ def visualize_sources(sources_data):
     color_col = "nace_21"
     sources_data.plot(column=color_col, markersize=sources_data[size_col]/10000, legend=True, figsize=(10,10))
     #increase plot size and reduce legend size
-    plt.show()
+    plt.ioff()
+    plt.draw()
     return
 
 def read_all_existing_pipelines(data_path=os.path.join("data_module", "Data"), case_study="igc_nrw"):

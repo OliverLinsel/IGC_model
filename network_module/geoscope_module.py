@@ -1,4 +1,4 @@
-##### network_module #####
+##### geoscope_template_module #####
 #orginated by OL 10.03.2026
 
 #This is the network module created for the IGC.NRW research project. It is subdivided into four submodules: Determining the geoscope, Creating the path template, creating the sources and creating the sinks.
@@ -36,7 +36,8 @@ def get_geoscope(data_path=os.path.join("data_module", "Data"), case_study="igc_
 def visualize_geoscope(geoscope_gdf):
     geoscope_gdf['index'] = geoscope_gdf.index
     geoscope_gdf.plot(column='index', cmap="viridis")
-    plt.show()
+    plt.ioff()
+    plt.draw()
     return
 
 work_geoscope_gdf_high_res, work_geoscope_gdf_agg = get_geoscope()

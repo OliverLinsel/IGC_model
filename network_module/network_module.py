@@ -1,6 +1,6 @@
 ##### network_module #####
 #orginated by OL 10.03.2026
-
+#%%
 #This is the network module created for the IGC.NRW research project. It is subdivided into four submodules: Determining the geoscope, Creating the path template, creating the sources and creating the sinks.
 #Additionally there is a visualization script to check the created data and the resulting network. The module is designed to be flexible and adaptable to different scenarios and data inputs, while also being efficient and scalable for larger datasets.
 
@@ -18,6 +18,7 @@ from pyproj import CRS
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from setup import get_system_path
+from shapely import wkt
 
 #Define module parameters:
 retrofit_cost_factor = 0.8
@@ -32,17 +33,20 @@ START = time.perf_counter()
 print('Execute in Directory:')
 print(os.getcwd() + "\n")
 
+# Get the directory where this script is located
+script_dir = os.path.dirname(os.path.abspath(__file__))
+
 #Define the paths
-data_path = os.path.join("data_module", "Data")
+data_path = os.path.join(script_dir, "..", "data_module", "Data")
 # data_path = get_system_path(data_path)
-output_path = r"output"
+output_path = os.path.join(script_dir, "..", "output")
 
 # Define the path to the TEMP subdirectory
-temp_dir = os.path.join(os.getcwd(), "TEMP")
+temp_dir = os.path.join(script_dir, "TEMP")
 os.makedirs(temp_dir, exist_ok=True)  # Create the directory if it doesn't exist
 
 # Create the directory if it doesn't exist
-figures_dir = os.path.join(os.getcwd(), "figures")
+figures_dir = os.path.join(script_dir, "figures")
 os.makedirs(figures_dir, exist_ok=True)
 
 # Define the scenarios
@@ -164,41 +168,57 @@ def connect_nodes_to_template(sources_data_op_gdf, routing_template_op_gdf):
     # Create a list to store the new connections
     new_connections = []
 
+    file_path = os.path.join(temp_dir, 'connections.csv')
+    print("The file path for the network connections is: " + str(file_path) + "\n")
+    print("The paths already exist: " + str(os.path.exists(file_path)) + "\n")
+
+    # Check if the file already exists
+    if os.path.exists(file_path):
+        # Read and transform the DataFrame from the file
+        connections_df = pd.read_csv(file_path)
+        # Ensure the 'geometry' column is properly converted to geometry objects and Geodataframe
+        connections_df['geometry'] = connections_df['geometry'].apply(wkt.loads)
+        connections_gdf = gpd.GeoDataFrame(connections_df, geometry='geometry')
+        connections_gdf = connections_gdf.set_crs(routing_template_op_gdf.crs)
+        connections_gdf = connections_gdf[["geometry"]]
+    else:
     # Iterate over each point in the sources_data_op_gdf
-    for idx, row in tqdm(sources_data_op_gdf.iterrows(), total=len(sources_data_op_gdf), desc="Connecting sources"):
-        point = row['geometry']
-        connected = False
+        for idx, row in tqdm(sources_data_op_gdf.iterrows(), total=len(sources_data_op_gdf), desc="Connecting sources to network"):
+            point = row['geometry']
+            connected = False
 
-        # Check if the point intersects with any LineString in the network
-        for _, line_row in routing_template_op_gdf.iterrows():
-            line = line_row['geometry']
-            if point.intersects(line):
-                # If the point is on the network, add it to the connections
-                new_connections.append(point)
-                connected = True
-                break
+            # Check if the point intersects with any LineString in the network
+            for _, line_row in routing_template_op_gdf.iterrows():
+                line = line_row['geometry']
+                if point.intersects(line):
+                    # If the point is on the network, add it to the connections
+                    new_connections.append(point)
+                    connected = True
+                    break
 
-        if not connected:
-            # Find the nearest LineString
-            distances = routing_template_op_gdf['geometry'].apply(lambda geom: point.distance(geom))
-            nearest_line_idx = distances.idxmin()
-            nearest_line = routing_template_op_gdf.loc[nearest_line_idx, 'geometry']
+            if not connected:
+                # Find the nearest LineString
+                distances = routing_template_op_gdf['geometry'].apply(lambda geom: point.distance(geom))
+                nearest_line_idx = distances.idxmin()
+                nearest_line = routing_template_op_gdf.loc[nearest_line_idx, 'geometry']
 
-            # Find the nearest point on the LineString
-            nearest_point = nearest_point_on_line(nearest_line, point)
+                # Find the nearest point on the LineString
+                nearest_point = nearest_point_on_line(nearest_line, point)
 
-            # Create a new LineString connecting the point to the nearest point on the LineString
-            new_line = LineString([point, nearest_point])
-            new_connections.append(new_line)
+                # Create a new LineString connecting the point to the nearest point on the LineString
+                new_line = LineString([point, nearest_point])
+                new_connections.append(new_line)
+                # Create a new GeoDataFrame with the connections
+                connections_gdf = gpd.GeoDataFrame(geometry=new_connections, crs=routing_template_op_gdf.crs)
 
-    # Create a new GeoDataFrame with the connections
-    connections_gdf = gpd.GeoDataFrame(geometry=new_connections, crs=routing_template_op_gdf.crs)
+        connections_gdf.to_csv(os.path.join(temp_dir, 'connections.csv'))
 
     routing_template_con_gdf = pd.concat([routing_template_op_gdf, connections_gdf], ignore_index=True)
     routing_template_con_gdf = routing_template_con_gdf.dissolve().explode(index_parts=False).reset_index(drop=True)
     return connections_gdf, routing_template_con_gdf
 
 connections_gdf, routing_template_op_gdf = connect_nodes_to_template(sources_data_gdf, clean_gdf)
+
 visualize_routing_template(connections_gdf)
 visualize_routing_template(routing_template_op_gdf)
 
@@ -282,12 +302,13 @@ def plot_network_and_sources_nodes(W, sources_data_op_out_gdf, routing_template_
         minx, miny, maxx, maxy = routing_template_op_gdf.total_bounds
 
         # Set the plot limits to the bounds of the routing_template_op_gdf
-        plt.xlim(minx, maxx)
-        plt.ylim(miny, maxy)
+        # plt.xlim(minx, maxx)
+        # plt.ylim(miny, maxy)
 
         # Save the plot as a PNG file in the figures subfolder
-        plt.savefig(f"figures/Routing_Template_with_Industry_Sources_{scenario_name.replace(' ', '_')}.png", dpi=300, bbox_inches='tight')
-        plt.show()
+        plt.savefig(os.path.join(figures_dir, f"Routing_Template_with_Industry_Sources_{scenario_name.replace(' ', '_')}.png"), dpi=300, bbox_inches='tight')
+        plt.ioff()
+        plt.draw()
     return
 
 # define the network
@@ -343,12 +364,17 @@ def create_network_graph(routing_template_gdf, sources_gdf):
     return W
 
 G = nx.Graph()  # Create an empty graph
+print("Fear the routing template: " + "\n")
+print(routing_template_op_gdf)
+print(sources_data_gdf)
 G = create_network_graph(routing_template_op_gdf, sources_data_gdf)
-plot_network_and_sources_nodes(G, sources_data_gdf, routing_template_gdf)
+plot_network_and_sources_nodes(G, sources_data_gdf, routing_template_op_gdf)
 
 def dijkstra_connect_sources(W, filtered_sources_df):
     # define TEMP file path to avoid having to calculate the paths again even if nothing changed
     file_path = os.path.join(temp_dir, 'paths_gdf.csv')
+    print("The file path for the paths_gdf is: " + str(file_path) + "\n")
+    print("The paths already exist: " + str(os.path.exists(file_path)) + "\n")
 
     # Check if the graph is connected
     if not nx.is_connected(W):
@@ -365,7 +391,12 @@ def dijkstra_connect_sources(W, filtered_sources_df):
     if os.path.exists(file_path):
         # Read the DataFrame from the file
         paths_df = pd.read_csv(file_path)
-        print("DataFrame loaded from file.")
+        # Convert WKT strings back to geometry objects
+        paths_df['path_geometry'] = paths_df['path_geometry'].apply(lambda x: wkt.loads(x) if isinstance(x, str) and x != 'None' else None)
+        paths_df = paths_df.rename(columns={'path_geometry': 'geometry'})
+        paths_gdf = gpd.GeoDataFrame(paths_df, geometry='geometry')
+        paths_gdf = paths_gdf.set_crs(routing_template_op_gdf.crs)
+        paths_gdf = calculate_length(paths_gdf).drop(columns=["index"], errors="ignore")
     else:
         # Assuming filtered_sources_df is your GeoDataFrame and  is your NetworkX graph
         paths_df = pd.DataFrame()
@@ -395,8 +426,6 @@ def dijkstra_connect_sources(W, filtered_sources_df):
                 # Print debugging information
                 # print(f"Source: {source['facility_name']} ({x_start}, {y_start}) -> Node: {start_node}")
                 # print(f"Sink: {sink['facility_name']} ({x_end}, {y_end}) -> Node: {end_node}")
-
-                # Find the shortest path between the start and end nodes
                 try:
                     shortest_path = nx.dijkstra_path(W, start_node, end_node)
                     # print(f"Shortest path found: {shortest_path}")
@@ -435,6 +464,149 @@ filtered_sources_df = filtered_sources_df.head(5).reset_index(drop=True)
 
 paths_gdf = dijkstra_connect_sources(G, filtered_sources_df)
 visualize_routing_template(paths_gdf)
+
+def plot_mst(W, sources_data_op_out_gdf, routing_template_op_gdf, figures_dir):
+    # Set the font to Times New Roman
+    plt.rcParams["font.family"] = "Times New Roman"
+
+    # Create the MST
+    mst = nx.minimum_spanning_tree(W)
+
+    # Set the figure size
+    plt.figure(figsize=(30, 30))  # Increased the size
+
+    # Draw the graph
+    pos = {node: node for node in W.nodes()}
+    nx.draw(W, pos, with_labels=False, node_size=0, node_color="black")
+
+    # Draw the MST edges
+    mst_edges = mst.edges()
+    mst_edge_list = [(u, v) for u, v in mst_edges]
+    nx.draw_networkx_edges(W, pos, edgelist=mst_edge_list, edge_color='red', width=4)
+
+    # Ensure that the "color" column contains only valid color values
+    valid_colors = sources_data_op_out_gdf["color"].dropna().unique()
+    color_map = {color: color for color in valid_colors}
+
+    # Plot the data
+    ax = sources_data_op_out_gdf.plot(
+        ax=plt.gca(),
+        color=sources_data_op_out_gdf["color"].map(color_map),  # Use the "color" column for coloring
+        markersize=sources_data_op_out_gdf["tco2_2023"]/2000,  # Adjusted markersize
+        legend=False,  # Disable the automatic legend
+        zorder=2,
+        alpha=0.8
+    )
+
+    # Create a legend mapping from the "Sector" column
+    sector_colors = sources_data_op_out_gdf.groupby("Sector")["color"].first()
+    legend_elements = [Line2D([0], [0], marker='o', color='w', label=sector,
+                            markerfacecolor=color, markersize=10)
+                     for sector, color in sector_colors.items()]
+
+    # Add title and custom legend
+    plt.title("Minimum Spanning Tree with Industry Sources", fontsize=16)  # Increased title font size
+
+    # Add the custom legend to the bottom right
+    plt.legend(handles=legend_elements, title="Sector", loc="lower right", fontsize=12)  # Increased legend font size
+
+    # Get the bounds of the routing_template_op_gdf
+    minx, miny, maxx, maxy = routing_template_op_gdf.total_bounds
+
+    # Set the plot limits to the bounds of the routing_template_op_gdf
+    # plt.xlim(minx, maxx)
+    # plt.ylim(miny, maxy)
+
+    # Save the plot as a PNG file in the figures subfolder
+    file_path = os.path.join(figures_dir, f"Minimum_Spanning_Tree_with_Industry_Sources_{scenario_name.replace(' ', '_')}.png")
+    if os.path.exists(file_path):
+        os.remove(file_path)
+    plt.savefig(file_path, dpi=300, bbox_inches='tight')
+    plt.ioff()
+    plt.draw()
+    return
+
+def plot_steiner_tree(W, sources_data_op_out_gdf, routing_template_op_gdf, figures_dir):
+    # Set the font to Times New Roman
+    plt.rcParams["font.family"] = "Times New Roman"
+
+    # Get the list of source nodes
+    source_nodes = [(row.geometry.x, row.geometry.y) for idx, row in sources_data_op_out_gdf.iterrows()]
+
+    # Create the Steiner Tree
+    steiner_tree = nx.approximation.steiner_tree(W, source_nodes)
+
+    # Set the figure size
+    plt.figure(figsize=(30, 30))  # Increased the size
+
+    # Draw the graph
+    pos = {node: node for node in W.nodes()}
+    nx.draw(W, pos, with_labels=False, node_size=0, node_color="black")
+
+    # Draw the Steiner Tree edges
+    steiner_edges = steiner_tree.edges()
+    steiner_edge_list = [(u, v) for u, v in steiner_edges]
+    nx.draw_networkx_edges(W, pos, edgelist=steiner_edge_list, edge_color='green', width=4)
+
+    # Ensure that the "color" column contains only valid color values
+    valid_colors = sources_data_op_out_gdf["color"].dropna().unique()
+    color_map = {color: color for color in valid_colors}
+
+    # Plot the data
+    ax = sources_data_op_out_gdf.plot(
+        ax=plt.gca(),
+        color=sources_data_op_out_gdf["color"].map(color_map),  # Use the "color" column for coloring
+        markersize=sources_data_op_out_gdf["tco2_2023"]/2000,  # Adjusted markersize
+        legend=False,  # Disable the automatic legend
+        zorder=2,
+        alpha=0.8
+    )
+
+    # Create a legend mapping from the "Sector" column
+    sector_colors = sources_data_op_out_gdf.groupby("Sector")["color"].first()
+    legend_elements = [Line2D([0], [0], marker='o', color='w', label=sector,
+                            markerfacecolor=color, markersize=10)
+                     for sector, color in sector_colors.items()]
+
+    # Add title and custom legend
+    plt.title("Steiner Tree with Industry Sources", fontsize=16)  # Increased title font size
+
+    # Add the custom legend to the bottom right
+    plt.legend(handles=legend_elements, title="Sector", loc="lower right", fontsize=12)  # Increased legend font size
+
+    # Get the bounds of the routing_template_op_gdf
+    minx, miny, maxx, maxy = routing_template_op_gdf.total_bounds
+
+    # Set the plot limits to the bounds of the routing_template_op_gdf
+    # plt.xlim(minx, maxx)
+    # plt.ylim(miny, maxy)
+
+    # Save the plot as a PNG file in the figures subfolder
+    file_path = os.path.join(figures_dir, f"Steiner_Tree_with_Industry_Sources_{scenario_name.replace(' ', '_')}.png")
+    if os.path.exists(file_path):
+        os.remove(file_path)
+    plt.savefig(file_path, dpi=300, bbox_inches='tight')
+    plt.ioff()
+    plt.draw()
+    return
+
+#reduce routing template to Dijkstra Paths
+routing_template_op_gdf = paths_gdf.dissolve().explode(index_parts=False).reset_index(drop=True)
+
+# Loop through each scenario option
+for scenario_name, scenario_list in scenarios.items():
+    G = nx.Graph()
+    # Filter the DataFrame for the scenario condition
+    filtered_sources_df = sources_data_gdf[sources_data_gdf["scenario"].isin(scenario_list)]
+
+    # Create the network graph for the filtered sources
+    G = create_network_graph(routing_template_op_gdf, filtered_sources_df)
+
+    # Plot the MST for the current scenario
+    plot_mst(G, filtered_sources_df, routing_template_op_gdf, figures_dir)
+
+    # Plot the Steiner Tree for the current scenario
+    plot_steiner_tree(G, filtered_sources_df, routing_template_op_gdf, figures_dir)
 
 STOP = time.perf_counter()
 print('Total execution time of script',round((STOP-START), 1), 's')

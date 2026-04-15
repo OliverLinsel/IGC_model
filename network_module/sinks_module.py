@@ -1,4 +1,4 @@
-##### network_module #####
+##### sinks_module #####
 #orginated by OL 10.03.2026
 
 #This is the network module created for the IGC.NRW research project. It is subdivided into four submodules: Determining the geoscope, Creating the path template, creating the sources and creating the sinks.

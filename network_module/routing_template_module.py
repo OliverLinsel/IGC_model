@@ -1,4 +1,4 @@
-##### network_module #####
+##### routing_template_module #####
 #orginated by OL 10.03.2026
 
 #This is the network module created for the IGC.NRW research project. It is subdivided into four submodules: Determining the geoscope, Creating the path template, creating the sources and creating the sinks.
@@ -68,7 +68,7 @@ def combine_and_process_routes(potential_retrofit_routes_gdf, potential_routes_g
 def visualize_routing_template(routing_template_gdf):
     routing_template_gdf['index'] = routing_template_gdf.index
     routing_template_gdf.plot(column='index', cmap="viridis")
-    plt.show()
+    plt.draw()
     return
 
 def get_routing_template(data_path=r".\data_module\Data", case_study="igc_nrw"):
