@@ -1,0 +1,1 @@
+### This is the npv_module to perform more detailed cost breakdowns of pipeline and infrastructure investments to determine such things as break-even points, necessary cash flows and subsequent grid fees to enable investigation of economical feasibility.

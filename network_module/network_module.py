@@ -17,7 +17,7 @@ from tqdm import tqdm
 from pyproj import CRS
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
-from setup import get_system_path
+from setup import get_system_path, get_ram_usage
 from shapely import wkt
 
 #Define module parameters:
@@ -209,7 +209,13 @@ def connect_nodes_to_template(sources_data_op_gdf, routing_template_op_gdf):
                 new_line = LineString([point, nearest_point])
                 new_connections.append(new_line)
                 # Create a new GeoDataFrame with the connections
-                connections_gdf = gpd.GeoDataFrame(geometry=new_connections, crs=routing_template_op_gdf.crs)
+                print("Jetzt sind wir hier: " + "\n")
+                print(new_connections)
+                connections_gdf = gpd.GeoDataFrame(geometry=new_connections)
+                connections_gdf = connections_gdf.set_crs(routing_template_op_gdf.crs)
+                connections_gdf = connections_gdf.rename(columns={"new_connections": "geometry"})
+                connections_gdf = connections_gdf[["geometry"]]
+                print("Wir sind jetzt hier: " + str(connections_gdf) + "\n")
 
         connections_gdf.to_csv(os.path.join(temp_dir, 'connections.csv'))
 
@@ -276,7 +282,7 @@ def plot_network_and_sources_nodes(W, sources_data_op_out_gdf, routing_template_
         ax = filtered_data.plot(
             ax=plt.gca(),
             color=filtered_data["color"].map(color_map),  # Use the "color" column for coloring
-            markersize=filtered_data["tco2_2023"]/5000,
+            markersize=filtered_data["tco2_2023"]/2000,
             legend=False,  # Disable the automatic legend
             zorder=2,
             alpha=0.8
@@ -406,6 +412,8 @@ def dijkstra_connect_sources(W, filtered_sources_df):
 
         # Loop through all connections between the source data points with a progress bar
         for i in tqdm(range(num_sources), desc="Processing sources"):
+            # Monitor RAM usage
+            get_ram_usage(i)
             for j in tqdm(range(i + 1, num_sources), desc="Processing sinks", leave=False):
                 source = filtered_sources_df.iloc[i]
                 sink = filtered_sources_df.iloc[j]
@@ -459,8 +467,9 @@ def dijkstra_connect_sources(W, filtered_sources_df):
     return paths_gdf
 
 # Filter the sources dataframe
+# filtered_sources_df = sources_data_gdf.copy() 
 filtered_sources_df = sources_data_gdf[sources_data_gdf["scenario"] != "E"]
-filtered_sources_df = filtered_sources_df.head(5).reset_index(drop=True)
+# filtered_sources_df = filtered_sources_df.head(5).reset_index(drop=True)
 
 paths_gdf = dijkstra_connect_sources(G, filtered_sources_df)
 visualize_routing_template(paths_gdf)
@@ -492,7 +501,7 @@ def plot_mst(W, sources_data_op_out_gdf, routing_template_op_gdf, figures_dir):
     ax = sources_data_op_out_gdf.plot(
         ax=plt.gca(),
         color=sources_data_op_out_gdf["color"].map(color_map),  # Use the "color" column for coloring
-        markersize=sources_data_op_out_gdf["tco2_2023"]/2000,  # Adjusted markersize
+        markersize=sources_data_op_out_gdf["tco2_2023"]/1000,  # Adjusted markersize
         legend=False,  # Disable the automatic legend
         zorder=2,
         alpha=0.8
@@ -501,7 +510,7 @@ def plot_mst(W, sources_data_op_out_gdf, routing_template_op_gdf, figures_dir):
     # Create a legend mapping from the "Sector" column
     sector_colors = sources_data_op_out_gdf.groupby("Sector")["color"].first()
     legend_elements = [Line2D([0], [0], marker='o', color='w', label=sector,
-                            markerfacecolor=color, markersize=10)
+                            markerfacecolor=color, markersize=20)
                      for sector, color in sector_colors.items()]
 
     # Add title and custom legend
@@ -537,7 +546,7 @@ def plot_steiner_tree(W, sources_data_op_out_gdf, routing_template_op_gdf, figur
     steiner_tree = nx.approximation.steiner_tree(W, source_nodes)
 
     # Set the figure size
-    plt.figure(figsize=(30, 30))  # Increased the size
+    plt.figure(figsize=(12, 12))  # Increased the size
 
     # Draw the graph
     pos = {node: node for node in W.nodes()}
@@ -546,7 +555,7 @@ def plot_steiner_tree(W, sources_data_op_out_gdf, routing_template_op_gdf, figur
     # Draw the Steiner Tree edges
     steiner_edges = steiner_tree.edges()
     steiner_edge_list = [(u, v) for u, v in steiner_edges]
-    nx.draw_networkx_edges(W, pos, edgelist=steiner_edge_list, edge_color='green', width=4)
+    nx.draw_networkx_edges(W, pos, edgelist=steiner_edge_list, edge_color='yellowgreen', width=6)
 
     # Ensure that the "color" column contains only valid color values
     valid_colors = sources_data_op_out_gdf["color"].dropna().unique()

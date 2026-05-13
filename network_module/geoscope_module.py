@@ -13,13 +13,15 @@ import matplotlib.pyplot as plt
 from setup import get_system_path
 
 epsg="3035"
+case_study = "igc_nrw"
+case_study = "h2bb"
 START = time.perf_counter() 
 
 print('Execute in Directory:')
 print(os.getcwd() + "\n")
 
 #read gpkg file with geo scope data
-def get_geoscope(data_path=os.path.join("data_module", "Data"), case_study="igc_nrw"):
+def get_geoscope(data_path=os.path.join("data_module", "Data"), case_study=case_study):
     geoscope_dir = get_system_path(data_path, "scenario_run_data", case_study, "geoscope")
     gpkg_file = next((f for f in os.listdir(geoscope_dir) if f.endswith('.gpkg')), None)
     if gpkg_file is None:
@@ -27,6 +29,11 @@ def get_geoscope(data_path=os.path.join("data_module", "Data"), case_study="igc_
     geoscope_gdf_high_res = gpd.read_file(os.path.join(geoscope_dir, gpkg_file))
     #to crs
     geoscope_gdf_high_res = geoscope_gdf_high_res.to_crs(epsg=epsg)
+    invalid_geometries = geoscope_gdf_high_res[~geoscope_gdf_high_res.is_valid]
+    if not invalid_geometries.empty:
+        print(f"Found {len(invalid_geometries)} invalid geometries. Dropping them..." + "\n")
+        print(invalid_geometries)
+        geoscope_gdf_high_res = geoscope_gdf_high_res.drop(invalid_geometries.index)
     #unite all geometries to one geometry to determine the maximum area scope
     geoscope_gdf_agg = geoscope_gdf_high_res.dissolve()
     #only keep geometry column in the aggregated geoscope gdf
@@ -38,6 +45,8 @@ def visualize_geoscope(geoscope_gdf):
     geoscope_gdf.plot(column='index', cmap="viridis")
     plt.ioff()
     plt.draw()
+    # plt.savefig("geoscope_geoplot.png", dpi=300)
+    # geoscope_gdf.to_clipboard()
     return
 
 work_geoscope_gdf_high_res, work_geoscope_gdf_agg = get_geoscope()

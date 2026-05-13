@@ -9,7 +9,7 @@ import os
 import pandas as pd
 import geopandas as gpd
 import matplotlib.pyplot as plt
-from setup import get_system_path
+from setup import get_system_path, get_ram_usage
 
 #delete after development
 case_study = "igc_nrw"
