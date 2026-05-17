@@ -8,6 +8,9 @@ import xarray as xr
 import numpy as np
 import linopy
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
+from matplotlib import cm
+import math
 
 case_study = "h2bb"
 # case_study = "igc_nrw"
@@ -55,6 +58,11 @@ transport_costs_long = transport_costs.melt(id_vars=['region1', "region2", 'comm
 
 pair_df = pd.merge(relationship_df, transport_costs_long, on=['region1', 'region2', 'scenario'])
 
+# Maybe need to duplicate data for bidirectional data transport
+# pair_df_swapped = pair_df.copy()
+# pair_df_swapped = pair_df_swapped.rename(columns={"region1":"region2", "region2":"region1"})
+# pd.concat([pair_df, pair_df_swapped], ignore_index=True)
+
 # -----------------------------
 # Prepare nodal datasets from dataframe to xarray
 # -----------------------------
@@ -94,9 +102,7 @@ data_1D = xr.Dataset(data_arrays)
 # Create transport pairs
 # -----------------------------
 
-# pair_df = pair_df[pair_df["time"] == 2030]
-
-#identify the unique regions:
+# Identify the unique regions:
 regions = merged_df["region"].unique()
 
 # Create a DataFrame with all possible pairs of the unique regions
@@ -110,21 +116,31 @@ pairs_list = list(pairs)
 # Filter pair_df to include only rows where (region1, region2) is in pairs_list
 pair_df = pair_df[pair_df.apply(lambda row: (row["region1"], row["region2"]) in pairs_list, axis=1)]
 
+# Create a copy of the original DataFrame for reciprocal data
+pair_df_reciprocal = pair_df.copy()
+
+# Swap region1 and region2 for reciprocal data
+pair_df_reciprocal["region1"], pair_df_reciprocal["region2"] = pair_df_reciprocal["region2"], pair_df_reciprocal["region1"].copy()
+
+# Concatenate the original and reciprocal DataFrames
+pair_df_combined = pd.concat([pair_df, pair_df_reciprocal], ignore_index=True)
+
 # Identify the dimension columns
-dimension_columns_2D = [col for col in pair_df.columns if col in ["region1", "region2", "commodity", "scenario", "time"]]
+dimension_columns_2D = [col for col in pair_df_combined.columns if col in ["region1", "region2", "commodity", "scenario", "time"]]
 
 # Identify value columns
-value_columns_2D = [col for col in pair_df.columns if col not in dimension_columns_2D]
+value_columns_2D = [col for col in pair_df_combined.columns if col not in dimension_columns_2D]
 
 # Initialize a dictionary to hold the lists for each dimension
 dimension_lists_2D = {}
-# Create separate DataArrays for each value column
+# Create a dictionary to hold the DataArrays for each value column
 data_arrays_2D = {}
 
 # Create lists of unique values for each dimension column
 for column in dimension_columns_2D:
-    dimension_lists_2D[column] = pair_df[column].unique().tolist()
+    dimension_lists_2D[column] = pair_df_combined[column].unique().tolist()
 
+# Create DataArrays for each value column
 for value_column_2D in value_columns_2D:
     data_arrays_2D[value_column_2D] = xr.DataArray(
         np.full(tuple(len(lst) for lst in dimension_lists_2D.values()), np.nan),
@@ -132,26 +148,23 @@ for value_column_2D in value_columns_2D:
         coords=dimension_lists_2D
     )
 
-# Fill the DataArrays with values from the DataFrame
-for _, row in pair_df.iterrows():
+# Fill the DataArrays with values from the combined DataFrame
+for _, row in pair_df_combined.iterrows():
     for value_column_2D in value_columns_2D:
         data_arrays_2D[value_column_2D].loc[tuple(row[dim] for dim in dimension_columns_2D)] = row[value_column_2D]
 
 # Combine the DataArrays into a single Dataset
-data_2D = xr.Dataset(data_arrays_2D)
+data_2D_combined = xr.Dataset(data_arrays_2D)
 
-import linopy
-import numpy as np
-import pandas as pd
-
-model = linopy.Model()
+# Remove self-transport (optional)
+data_2D_combined = data_2D_combined.where(data_2D_combined.region1 != data_2D_combined.region2, drop=True)
 
 # -----------------------------
 # Get dimensions
 # -----------------------------
 
 data_1D = data_1D.fillna(0)
-data_2D = data_2D.fillna(0)
+data_2D = data_2D_combined.fillna(0)
 
 df_1D = merged_df.copy()
 dims_1D = list(data_1D.dims)
@@ -166,237 +179,210 @@ commodities = np.unique(data_1D["commodity"])
 scenarios = np.unique(data_1D["scenario"])
 times = np.unique(data_1D["time"])
 
-data_2D = data_2D.sel(
-    region1=[r.item() for r in data_2D.region1.values if r in regions.values],
-    region2=[r.item() for r in data_2D.region2.values if r in regions.values],
-)
+### Initialize Model ###
+model = linopy.Model()
 
-# -----------------------------
-# Variables
-# -----------------------------
+### Build Transport Graph ###
+regions = data_1D.region.values
 
+### Create Region Pairs ###
+all_pairs = pd.MultiIndex.from_product([regions, regions], names=["region1", "region2"])
+all_pairs = pd.DataFrame(index=all_pairs).reset_index()
+all_pairs = all_pairs[all_pairs.region1 != all_pairs.region2]
+
+### Collect Dimensions ###
+commodities = data_1D.commodity.values
+scenarios = data_1D.scenario.values
+times = data_1D.time.values
+
+extra_dims = pd.MultiIndex.from_product([commodities, scenarios, times], names=["commodity","scenario","time"])
+extra_dims = pd.DataFrame(index=extra_dims).reset_index()
+
+### Cartesian Expansion ###
+all_pairs["key"] = 1
+extra_dims["key"] = 1
+full_pairs = all_pairs.merge(extra_dims, on="key").drop("key", axis=1)
+
+### Merge Transport Data ###
+pair_df_tmp = pair_df_combined.copy()
+data_full = full_pairs.merge(pair_df_tmp, on=["region1", "region2", "commodity", "scenario", "time"], how="left")
+
+### Fill Missing Values ###
+DEFAULT_TRANSPORT_COST = 30
+data_full["value"] = data_full["value"].fillna(DEFAULT_TRANSPORT_COST)
+np.random.seed(42)
+data_full["value"] += np.random.uniform(0, .001, len(data_full))
+
+### Convert to xarray ###
+data_2D = data_full.set_index(["region1", "region2", "commodity", "scenario", "time"]).to_xarray()
+data_2D = data_2D.reindex(region1=regions, region2=regions)
+
+### Expand Nodal Data ###
+data_1D_expanded = data_1D.expand_dims(region1=regions, region2=regions)
+data_1D = data_1D.fillna(0)
+data_new = xr.merge([data_1D_expanded, data_2D], join="exact")
+data = data_new.fillna(0)
+
+### Remove NaNs ###
+data_1D = data_1D.fillna(0)
+data_2D = data_2D.fillna({"value": 0, "counter": 0, "rel_relation": 0, "vom_multiplier": 0})
+
+for v in data_2D.data_vars:
+    n_missing = np.isnan(data_2D[v]).sum()
+    if n_missing > 0: print(f"{v}: {n_missing} NaNs")
+
+for v in data_1D.data_vars:
+    n_missing = np.isnan(data_1D[v]).sum()
+    if n_missing > 0: print(f"{v}: {n_missing} NaNs")
+
+print("NaN check complete")
+print("\nCoordinate check:")
+print(data_new.region1.values)
+print(data_new.region2.values)
+
+data_2D
+data.sel(region1='EU-FIN', commodity='h2', scenario='Base', time=int(2030))
+
+### Variables ###
 v_production = model.add_variables(
-    lower=0,
-    upper=data_1D["supply"] * 100,
-    coords=data_1D.coords,
-    dims=data_1D.dims,
-    name="v_production"
-)
+    lower=0, upper=data_1D["supply"], coords=data_1D.coords, dims=data_1D.dims, name="v_production")
 
 v_transport = model.add_variables(
-    lower=0,
-    coords=data_2D.coords,
-    dims=data_2D.dims,
-    name="v_transport"
-)
+    lower=0, coords=data_2D.coords, dims=data_2D.dims, name="v_transport")
 
 v_unmet = model.add_variables(
-    lower=0,
-    coords=data_1D.coords,
-    dims=data_1D.dims,
-    name="v_unmet"
-)
+    lower=0, coords=data_1D.coords, dims=data_1D.dims, name="v_unmet")
 
-# -----------------------------
-# Flow terms
-# -----------------------------
+### Flow Accounting ###
+transport_efficiency = .95
+inflow = v_transport.sum(dim="region1").rename(region2="region")
+outflow = v_transport.sum(dim="region2").rename(region1="region")
 
-inflow = v_transport.sum(dim="region1")
-outflow = v_transport.sum(dim="region2")
-
-# -----------------------------
-# Constraints
-# -----------------------------
-
-# Sanity check for total supply
+### Diagnostics ###
 net_demand = df_1D["supply"].sum() - df_1D["demand"].sum()
-if net_demand.sum() < 0:
-    print("Warning: Total demand exceeds total supply. The model might be infeasible.")
-else:
-    print(str(net_demand.sum()) + " TWh excess production potential")
+if net_demand < 0: print("Warning: demand exceeds supply")
+else: print(f"{net_demand:.2f} excess production")
 
-c_supply = model.add_constraints(
-    v_production <= data_1D["supply"],
-    name="c_supply"
-)
+### Constraints ###
+c_production = model.add_constraints(
+    v_production <= data_1D["supply"], name="c_supply")
 
 c_balance = model.add_constraints(
-    v_production
-    + inflow
-    - outflow
-    + v_unmet
-    >= data_1D["demand"],
-    name="c_balance"
-)
+    v_production - outflow + inflow*transport_efficiency + v_unmet >= data_1D["demand"], name="c_balance")
 
-# -----------------------------
-# Cost terms
-# -----------------------------
+### Objective ###
+production_costs = (v_production * data_1D["price"]
+                    ).sum()
 
-production_costs = (
-    v_production * data_1D["price"]).sum()
+transport_costs = (v_transport * data_2D["value"] * data_2D["vom_multiplier"]
+                   ).sum()
 
-transport_costs = (
-    v_transport * data_2D["value"]).sum()
+penalty_costs = (v_unmet * 10000).sum()
 
-#Energy from heaven feasibility penalty
-penalty_costs = (
-    v_unmet * 1000).sum()
+### Objective Function ###
+obj_fun = model.add_objective(
+    production_costs + transport_costs + penalty_costs, sense="min")
 
-# -----------------------------
-# Objective function
-# -----------------------------
-
-obj_func = model.add_objective(
-    production_costs + transport_costs + penalty_costs,
-    sense="min"
-)
-
-# -----------------------------
-# Solve and debug
-# -----------------------------
-
+### Solve ###
 model.solve(solver_name="gurobi")
-
 sol = model.solution
 
 if sol is not None:
     print("Solution found")
-
-    # example: production
+    print(model.objective)
     print(sol["v_production"])
-
-    # example: transport
     print(sol["v_transport"])
 else:
     print("No solution available")
 
-import matplotlib.pyplot as plt
-import numpy as np
-import math
-from matplotlib.patches import Patch
-
-# Create arbitrary transport values for testing
-def create_arbitrary_transport_values():
-    transport_values = np.random.rand(len(times), len(ds.region1), len(ds.region2)) * 10
-    transport_array = xr.DataArray(
-        transport_values,
-        dims=["time", "region1", "region2"],
-        coords={
-            "time": times,
-            "region1": ds.region1.values,
-            "region2": ds.region2.values
-        }
-    )
-    return transport_array
-
-# Assuming ds is your xarray Dataset
 ds = model.solution
-
 regions = ds.region.values
 times_all = ds.time.values
-
-# every 2nd year
 times = times_all[::2]
 
 n = len(regions) + 1
 ncols = 3
 nrows = math.ceil(n / ncols)
 
-# -----------------------------
-# moderate figure size (KEY FIX)
-fig, axes = plt.subplots(
-    nrows, ncols,
-    figsize=(6 * ncols, 6 * nrows)
-)
-
+fig, axes = plt.subplots(nrows, ncols, figsize=(6*ncols,6*nrows))
 axes = np.array(axes).flatten()
 
-ring_width = 0.12
-base_radius = 0.5
+ring_width = .12
+base_radius = .5
 
-colors = {
+base_colors = {
     "production": "#1f77b4",
-    "transport": "#ff7f0e",
-    "unmet": "#2ca02c",
+    "unmet": "grey",
     "demand": "#d62728"
 }
 
+cmap = cm.get_cmap("Wistia", len(regions))
+transport_colors = {region: cmap(i) for i, region in enumerate(regions)}
+region_label_colors = {region: cmap(i) for i, region in enumerate(regions)}
+region_label_colors["TOTAL"] = "white"
+
 legend_handles = [
-    Patch(color=colors["production"], label="Production"),
-    Patch(color=colors["transport"], label="Transport"),
-    Patch(color=colors["unmet"], label="Unmet"),
-    Patch(color=colors["demand"], label="Demand")
+    Patch(color=base_colors["production"], label="Production"),
+    Patch(color=base_colors["unmet"], label="Unmet"),
+    Patch(color=base_colors["demand"], label="Demand")
 ]
 
-def draw_donut(ax, production_series, transport_series, unmet_series, demand_series, title):
-    ax.set_title(title, fontsize=11)
+for r in regions:
+    legend_handles.append(Patch(color=transport_colors[r], label=f"Import from {r}"))
 
+def draw_donut(ax, region, production_series, unmet_series, demand_series, title):
+    ax.set_title(title, fontsize=11, bbox=dict(boxstyle="round", ec="white", fc=region_label_colors[title]))
     for j, t in enumerate(times):
         radius = base_radius + j * ring_width
         year = str(t)
-
         production = float(production_series.sel(time=t))
-        transport = float(transport_series.sel(time=t).sum())
         unmet = float(unmet_series.sel(time=t))
         demand = float(demand_series.sel(time=t))
 
-        wedges, _ = ax.pie(
-            [production, transport, unmet, demand],
-            radius=radius,
-            startangle=90,
-            colors=[colors["production"], colors["transport"], colors["unmet"], colors["demand"]],
-            wedgeprops=dict(width=ring_width, edgecolor="white")
-        )
+        imports = []
+        import_colors = []
+        for source in regions:
+            if source == region:
+                continue
+            val = float(ds["v_transport"].sel(region1=source, region2=region, commodity="h2", scenario="Base", time=t))
+            if val > 0:
+                imports.append(val)
+                import_colors.append(transport_colors[source])
 
-        for w, val in zip(wedges, [production, transport, unmet, demand]):
-            theta = (w.theta1 + w.theta2) / 2.0
-            theta_rad = np.deg2rad(theta)
+        values = [production] + imports + [unmet, demand]
+        colors = [base_colors["production"]] + import_colors + [base_colors["unmet"], base_colors["demand"]]
 
+        wedges, _ = ax.pie(values, radius=radius, startangle=90, colors=colors, wedgeprops=dict(width=ring_width, edgecolor="white"))
+        total = np.sum(values)
+
+        for w, val in zip(wedges, values):
+            if val / total < 0.08:
+                continue
+            theta = (w.theta1 + w.theta2) / 2
+            theta = np.deg2rad(theta)
             r_text = radius - ring_width / 2
-            x = r_text * np.cos(theta_rad)
-            y = r_text * np.sin(theta_rad)
-
-            ax.text(
-                x, y,
-                f"{val:.0f}\n({year})",
-                ha="center",
-                va="center",
-                fontsize=7  # reduced for clarity
-            )
-
+            x = r_text * np.cos(theta)
+            y = r_text * np.sin(theta)
+            ax.text(x, y, f"{val:.0f}\n{year}", ha="center", va="center", fontsize=6)
     ax.set(aspect="equal")
 
-# -----------------------------
-# region plots
-# -----------------------------
 for i, region in enumerate(regions):
     production = ds["v_production"].sel(region=region, commodity="h2", scenario="Base")
-    transport = ds["v_transport"].sel(scenario="Base", commodity="h2")
-    # transport = create_arbitrary_transport_values()
     unmet = ds["v_unmet"].sel(region=region, commodity="h2", scenario="Base")
     demand = data_1D["demand"].sel(region=region, commodity="h2", scenario="Base")
+    draw_donut(axes[i], region, production, unmet, demand, region)
 
-    draw_donut(axes[i], production, transport, unmet, demand, str(region))
-
-# -----------------------------
-# TOTAL plot
-# -----------------------------
-total_production = ds["v_production"].sel(commodity="h2", scenario="Base").sum(dim="region")
-total_transport = ds["v_transport"].sel(scenario="Base", commodity="h2").sum(dim=["region1", "region2"])
-# total_transport = create_arbitrary_transport_values().sum(dim=["region1", "region2"])
-total_unmet = ds["v_unmet"].sel(commodity="h2", scenario="Base").sum(dim="region")
-total_demand = data_1D["demand"].sel(commodity="h2", scenario="Base").sum(dim="region")
-
-draw_donut(axes[len(regions)], total_production, total_transport, total_unmet, total_demand, "TOTAL")
+total_production = ds["v_production"].sel(commodity="h2", scenario="Base").sum("region")
+total_unmet = ds["v_unmet"].sel(commodity="h2", scenario="Base").sum("region")
+total_demand = data_1D["demand"].sel(commodity="h2", scenario="Base").sum("region")
+draw_donut(axes[len(regions)], regions[0], total_production, total_unmet, total_demand, "TOTAL")
 
 for j in range(len(regions) + 1, len(axes)):
     fig.delaxes(axes[j])
 
-fig.legend(handles=legend_handles, loc="upper right")
-
+fig.legend(handles=legend_handles, loc="center right")
 plt.tight_layout()
-fig.subplots_adjust(wspace=0.25, hspace=0.35)
+plt.subplots_adjust(right=.83)
 
 # Save the plot as a PNG file in the figures subfolder
 file_path = os.path.join(output_path, f"Production_transport_demand_balance_{case_study.replace(' ', '_')}.png")
@@ -405,6 +391,108 @@ if os.path.exists(file_path):
 plt.savefig(file_path, dpi=300, bbox_inches='tight')
 plt.ioff()
 plt.show()
+
+# Your existing code for creating the plot
+ds = model.solution
+regions = ds.region.values
+times_all = ds.time.values
+times = times_all[::2]
+
+n = len(regions) + 1
+ncols = 3
+nrows = math.ceil(n / ncols)
+
+fig, axes = plt.subplots(nrows, ncols, figsize=(6*ncols,6*nrows))
+axes = np.array(axes).flatten()
+
+bar_width = 1
+index = np.arange(len(times))
+
+base_colors = {
+    "production": "#1f77b4",
+    "unmet": "grey",
+    "demand": "#d62728"
+}
+
+cmap = cm.get_cmap("Wistia", len(regions))
+transport_colors = {region: cmap(i) for i, region in enumerate(regions)}
+region_label_colors = {region: cmap(i) for i, region in enumerate(regions)}
+region_label_colors["TOTAL"] = "white"
+
+legend_handles = [
+    Patch(color=base_colors["production"], label="Production"),
+    Patch(color=base_colors["unmet"], label="Unmet"),
+    Patch(color=base_colors["demand"], label="Demand")
+]
+
+for r in regions:
+    legend_handles.append(Patch(color=transport_colors[r], label=f"Import from {r}"))
+
+def draw_stacked_bar(ax, region, production_series, unmet_series, demand_series, title):
+    ax.set_title(title, fontsize=11, bbox=dict(boxstyle="round", ec="white", fc=region_label_colors[title]))
+    bottom = np.zeros(len(times))
+
+    for j, t in enumerate(times):
+        year = str(t)
+        production = float(production_series.sel(time=t))
+        unmet = float(unmet_series.sel(time=t))
+        demand = float(demand_series.sel(time=t))
+
+        imports = []
+        import_colors = []
+        for source in regions:
+            if source == region:
+                continue
+            val = float(ds["v_transport"].sel(region1=source, region2=region, commodity="h2", scenario="Base", time=t))
+            if val > 0:
+                imports.append(val)
+                import_colors.append(transport_colors[source])
+
+        values = [production] + imports + [unmet, demand]
+        colors = [base_colors["production"]] + import_colors + [base_colors["unmet"], base_colors["demand"]]
+
+        for val, color in zip(values, colors):
+            ax.bar(j, val, bottom=bottom[j], width=bar_width, color=color, edgecolor="white")
+            bottom[j] += val
+
+        total = np.sum(values)
+        for k, val in enumerate(values):
+            if val / total < 0.08:
+                continue
+            ax.text(j, bottom[j] - val / 2, f"{val:.0f}\n{year}", ha="center", va="center", fontsize=6, color="white")
+
+    ax.set_xticks(index)
+    ax.set_xticklabels(times)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Quantity")
+    ax.set_ylim(0, np.max(bottom) * 1.1)
+
+for i, region in enumerate(regions):
+    production = ds["v_production"].sel(region=region, commodity="h2", scenario="Base")
+    unmet = ds["v_unmet"].sel(region=region, commodity="h2", scenario="Base")
+    demand = data_1D["demand"].sel(region=region, commodity="h2", scenario="Base")
+    draw_stacked_bar(axes[i], region, production, unmet, demand, region)
+
+total_production = ds["v_production"].sel(commodity="h2", scenario="Base").sum("region")
+total_unmet = ds["v_unmet"].sel(commodity="h2", scenario="Base").sum("region")
+total_demand = data_1D["demand"].sel(commodity="h2", scenario="Base").sum("region")
+draw_stacked_bar(axes[len(regions)], regions[0], total_production, total_unmet, total_demand, "TOTAL")
+
+for j in range(len(regions) + 1, len(axes)):
+    fig.delaxes(axes[j])
+
+fig.legend(handles=legend_handles, loc="center right")
+plt.tight_layout()
+plt.subplots_adjust(right=.83)
+
+# Save the plot as a PNG file in the figures subfolder
+file_path = os.path.join(output_path, f"Production_transport_demand_columns_{case_study.replace(' ', '_')}.png")
+# Remove the file if it already exists
+if os.path.exists(file_path):
+    os.remove(file_path)
+plt.savefig(file_path, dpi=300)  # bbox_inches='tight' is commented out
+print(f"Plot saved successfully at {file_path}")
+plt.ioff()
 
 #%%
 STOP = time.perf_counter()
