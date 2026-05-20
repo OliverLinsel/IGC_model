@@ -46,9 +46,9 @@ prices_long = reshape_data(prices_df, 'price')
 demands_long = reshape_data(demands_df, 'demand')
 supply_long = reshape_data(supply_df, 'supply')
 
-# Merge the DataFrames
-merged_df = pd.merge(prices_long, demands_long, on=['region', 'commodity', 'scenario', 'time'])
-merged_df = pd.merge(merged_df, supply_long, on=['region', 'commodity', 'scenario', 'time'])
+# Merge the DataFrames and store nodal information in data_1D_df
+data_1D_df = pd.merge(prices_long, demands_long, on=['region', 'commodity', 'scenario', 'time'])
+data_1D_df = pd.merge(data_1D_df, supply_long, on=['region', 'commodity', 'scenario', 'time'])
 
 # Read relationship factors
 relationship_df = pd.read_excel(os.path.join(data_path, case_study, "relationship_transport_data.xlsx"), sheet_name='relationship')
@@ -56,22 +56,23 @@ transport_costs = pd.read_excel(os.path.join(data_path, case_study, "relationshi
 transport_costs_long = transport_costs.melt(id_vars=['region1', "region2", 'commodity', 'scenario'],
                     var_name='time')
 
-pair_df = pd.merge(relationship_df, transport_costs_long, on=['region1', 'region2', 'scenario'])
+data_2D_df = pd.merge(relationship_df, transport_costs_long, on=['region1', 'region2', 'scenario'])
 
-# Maybe need to duplicate data for bidirectional data transport
-# pair_df_swapped = pair_df.copy()
-# pair_df_swapped = pair_df_swapped.rename(columns={"region1":"region2", "region2":"region1"})
-# pd.concat([pair_df, pair_df_swapped], ignore_index=True)
+# data_2D_df_reci = data_2D_df.copy()
+# data_2D_df_reci = data_2D_df_reci.rename(columns={"region1":"region2", "region2":"region1"})
+# pd.concat([data_2D_df, data_2D_df_reci], ignore_index=True)
 
+print(data_1D_df.head())
+print(data_2D_df.head())
 # -----------------------------
 # Prepare nodal datasets from dataframe to xarray
 # -----------------------------
 
 # Identify the dimension columns
-dimension_columns = [col for col in merged_df.columns if col in ["region", "commodity", "scenario", "time"]]
+dimension_columns = [col for col in data_1D_df.columns if col in ["region", "commodity", "scenario", "time"]]
 
 # Identify value columns
-value_columns = [col for col in merged_df.columns if col not in dimension_columns]
+value_columns = [col for col in data_1D_df.columns if col not in dimension_columns]
 
 # Initialize a dictionary to hold the lists for each dimension
 dimension_lists = {}
@@ -80,7 +81,7 @@ data_arrays = {}
 
 # Create lists of unique values for each dimension column
 for column in dimension_columns:
-    dimension_lists[column] = merged_df[column].unique().tolist()
+    dimension_lists[column] = data_1D_df[column].unique().tolist()
 
 for value_column in value_columns:
     data_arrays[value_column] = xr.DataArray(
@@ -90,7 +91,7 @@ for value_column in value_columns:
     )
 
 # Fill the DataArrays with values from the DataFrame
-for _, row in merged_df.iterrows():
+for _, row in data_1D_df.iterrows():
     for value_column in value_columns:
         data_arrays[value_column].loc[tuple(row[dim] for dim in dimension_columns)] = row[value_column]
 
@@ -103,7 +104,7 @@ data_1D = xr.Dataset(data_arrays)
 # -----------------------------
 
 # Identify the unique regions:
-regions = merged_df["region"].unique()
+regions = data_1D_df["region"].unique()
 
 # Create a DataFrame with all possible pairs of the unique regions
 pairs = pd.MultiIndex.from_product(
@@ -114,22 +115,22 @@ pairs = pd.MultiIndex.from_product(
 pairs_list = list(pairs)
 
 # Filter pair_df to include only rows where (region1, region2) is in pairs_list
-pair_df = pair_df[pair_df.apply(lambda row: (row["region1"], row["region2"]) in pairs_list, axis=1)]
+data_2D_df = data_2D_df[data_2D_df.apply(lambda row: (row["region1"], row["region2"]) in pairs_list, axis=1)]
 
 # Create a copy of the original DataFrame for reciprocal data
-pair_df_reciprocal = pair_df.copy()
+data_2D_df_reci = data_2D_df.copy()
 
 # Swap region1 and region2 for reciprocal data
-pair_df_reciprocal["region1"], pair_df_reciprocal["region2"] = pair_df_reciprocal["region2"], pair_df_reciprocal["region1"].copy()
+data_2D_df_reci["region1"], data_2D_df_reci["region2"] = data_2D_df_reci["region2"], data_2D_df_reci["region1"].copy()
 
 # Concatenate the original and reciprocal DataFrames
-pair_df_combined = pd.concat([pair_df, pair_df_reciprocal], ignore_index=True)
+data_2D_df_combined = pd.concat([data_2D_df, data_2D_df_reci], ignore_index=True)
 
 # Identify the dimension columns
-dimension_columns_2D = [col for col in pair_df_combined.columns if col in ["region1", "region2", "commodity", "scenario", "time"]]
+dimension_columns_2D = [col for col in data_2D_df_combined.columns if col in ["region1", "region2", "commodity", "scenario", "time"]]
 
 # Identify value columns
-value_columns_2D = [col for col in pair_df_combined.columns if col not in dimension_columns_2D]
+value_columns_2D = [col for col in data_2D_df_combined.columns if col not in dimension_columns_2D]
 
 # Initialize a dictionary to hold the lists for each dimension
 dimension_lists_2D = {}
@@ -138,7 +139,7 @@ data_arrays_2D = {}
 
 # Create lists of unique values for each dimension column
 for column in dimension_columns_2D:
-    dimension_lists_2D[column] = pair_df_combined[column].unique().tolist()
+    dimension_lists_2D[column] = data_2D_df_combined[column].unique().tolist()
 
 # Create DataArrays for each value column
 for value_column_2D in value_columns_2D:
@@ -149,7 +150,7 @@ for value_column_2D in value_columns_2D:
     )
 
 # Fill the DataArrays with values from the combined DataFrame
-for _, row in pair_df_combined.iterrows():
+for _, row in data_2D_df_combined.iterrows():
     for value_column_2D in value_columns_2D:
         data_arrays_2D[value_column_2D].loc[tuple(row[dim] for dim in dimension_columns_2D)] = row[value_column_2D]
 
@@ -158,26 +159,6 @@ data_2D_combined = xr.Dataset(data_arrays_2D)
 
 # Remove self-transport (optional)
 data_2D_combined = data_2D_combined.where(data_2D_combined.region1 != data_2D_combined.region2, drop=True)
-
-# -----------------------------
-# Get dimensions
-# -----------------------------
-
-data_1D = data_1D.fillna(0)
-data_2D = data_2D_combined.fillna(0)
-
-df_1D = merged_df.copy()
-dims_1D = list(data_1D.dims)
-df_2D = pair_df.copy()
-dims_2D = list(data_2D.dims)
-
-data_1D = data_1D.fillna(0)
-data_2D = data_2D.fillna(0)
-
-regions = data_1D["region"]
-commodities = np.unique(data_1D["commodity"])
-scenarios = np.unique(data_1D["scenario"])
-times = np.unique(data_1D["time"])
 
 ### Initialize Model ###
 model = linopy.Model()
@@ -204,7 +185,7 @@ extra_dims["key"] = 1
 full_pairs = all_pairs.merge(extra_dims, on="key").drop("key", axis=1)
 
 ### Merge Transport Data ###
-pair_df_tmp = pair_df_combined.copy()
+pair_df_tmp = data_2D_df_combined.copy()
 data_full = full_pairs.merge(pair_df_tmp, on=["region1", "region2", "commodity", "scenario", "time"], how="left")
 
 ### Fill Missing Values ###
@@ -242,7 +223,6 @@ print(data_new.region2.values)
 
 data_2D
 data.sel(region1='EU-FIN', commodity='h2', scenario='Base', time=int(2030))
-
 ### Variables ###
 v_production = model.add_variables(
     lower=0, upper=data_1D["supply"], coords=data_1D.coords, dims=data_1D.dims, name="v_production")
@@ -259,7 +239,7 @@ inflow = v_transport.sum(dim="region1").rename(region2="region")
 outflow = v_transport.sum(dim="region2").rename(region1="region")
 
 ### Diagnostics ###
-net_demand = df_1D["supply"].sum() - df_1D["demand"].sum()
+net_demand = data_1D_df["supply"].sum() - data_1D_df["demand"].sum()
 if net_demand < 0: print("Warning: demand exceeds supply")
 else: print(f"{net_demand:.2f} excess production")
 
