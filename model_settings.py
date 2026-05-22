@@ -10,13 +10,16 @@ print(os.getcwd() + "\n")
 script_dir = os.getcwd()
 
 ### centrally define case study, can be overwritten by calling get_settings with another case_study argument
-case_study = "h2bb"
+central_case_study = "h2bb"
  
 ### Define the default parameters ###
 defaults = {
     "case_study": "default",# return case study name if required for e.g. visualizations
     "transport_costs": 30,  # €/MWh
     "commodity_price": 50,  # €/MWh
+    "base_step":"ds_p_0",   # define the base step that contains e.g. the fixed demand
+    "max_total_dependence_rel": 0.5, #maximum share that may be imported to one region from all other regions
+    "max_indiv_dependence_rel": 0.2, #maximum share that may be imported to one region from another region
 }
 
 ### Define case study specific parameters ###
@@ -26,11 +29,15 @@ case_studies = {
         "case_study": "h2bb",   # return case study name if required for e.g. visualizations
         "transport_costs": 25,  # €/MWh
         "commodity_price": 45,  # €/MWh
+        "base_step":"ds_p_0",   # define the base step that contains e.g. the fixed demand
+        "max_total_dependence_rel": 0.5, #maximum share that may be imported to one region from all other regions
+        "max_indiv_dependence_rel": 0.2, #maximum share that may be imported to one region from another region
     },
     "igc_nrw": {
         "case_study": "igc_nrw",# return case study name if required for e.g. visualizations
         "transport_costs": 35,  # €/MWh
         "commodity_price": 55,  # €/MWh
+        "base_step":"ds_p_0",
     },
 }
 
@@ -41,7 +48,7 @@ def get_settings(case_study_arg=None, parameter=None):
     # If parameter is provided, return the specific parameter for the case study
 
     # Determine which case study to use
-    current_case_study = case_study_arg if case_study_arg is not None else case_study
+    current_case_study = case_study_arg if case_study_arg is not None else central_case_study
 
     # Get the settings for the current case study, or use defaults if the case study is not defined
     settings = case_studies.get(current_case_study, defaults.copy())
@@ -63,7 +70,7 @@ if __name__ == "__main__":
     print(get_settings())
 
     # Get a specific parameter for the current case study
-    print(get_settings(parameter="transport_costs"))
+    print(get_settings(parameter="base_step"))
 
     # Get a specific parameter for a different case study
     print(get_settings(case_study_arg="other_case", parameter="commodity_price"))

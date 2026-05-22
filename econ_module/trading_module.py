@@ -4,6 +4,7 @@
 import pandas as pd
 import time
 import os
+import sys
 import xarray as xr
 import numpy as np
 import linopy
@@ -11,50 +12,127 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 from matplotlib import cm
 import math
+import matplotlib.pyplot as plt, pandas as pd, seaborn as sns
 
-case_study = "h2bb"
-# case_study = "igc_nrw"
 START = time.perf_counter()
 
 print('Execute in Directory:')
 print(os.getcwd() + "\n")
 
-# Get the directory where this script is located
-script_dir = os.getcwd() #os.path.dirname(os.path.abspath(__file__))
+# Add the parent directory to the Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-#Define the paths
+# Get the directory where this script is located
+script_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Define the paths
 try:
-    data_path = os.path.join(script_dir, "econ_module", "data")
-    output_path = os.path.join(script_dir, "econ_module", "output")
+    data_path = os.path.join(script_dir, "data")
+    output_path = os.path.join(script_dir, "output")
 except:
-    data_path = os.path.join(script_dir, "econ_module", "data")
-    output_path = os.path.join(script_dir, "econ_module", "output")
+    data_path = os.path.join(script_dir, "data")
+    output_path = os.path.join(script_dir, "output")
+
+from model_settings import get_settings
+### Define central parameter values ###
+case_study = get_settings(parameter="case_study")
+transport_costs_param = get_settings(parameter="transport_costs")
+base_step_param = get_settings(parameter="base_step")
+reference_region = "EU-DEU"
 
 # Load the data
 prices_df = pd.read_excel(os.path.join(data_path, case_study, "region_tables.xlsx"), sheet_name='prices')
 demands_df = pd.read_excel(os.path.join(data_path, case_study, "region_tables.xlsx"), sheet_name='demands')
 supply_df = pd.read_excel(os.path.join(data_path, case_study, "region_tables.xlsx"), sheet_name='supply')
 
+def calculate_sensitivity_differences(df):
+    # Initialize a list to store the results
+    results = []
+
+    # Iterate over each row in the dataframe
+    for index, row in df.iterrows():
+        # Get the region, commodity, and scenario
+        region = row['region']
+        commodity = row['commodity']
+        scenario = row['scenario']
+
+        # Get all the sensitivity columns
+        sensitivity_cols = [col for col in df.columns if col.startswith('ds_')]
+
+        # Sort the sensitivity columns based on the numerical value in the column name
+        # and taking into account that 'm' is negative and 'p' is positive
+        sensitivity_cols.sort(key=lambda x: -int(x.split('_')[-1]) if x.split('_')[-2] == 'm' else int(x.split('_')[-1]))
+
+        # Get the values from the sensitivity columns
+        values = [row[col] for col in sensitivity_cols]
+
+        # Calculate the differences between the sensitivities
+        differences = []
+        for i in range(1, len(values)):
+            difference = values[i] - values[i-1]
+            differences.append(difference)
+
+        # Store the results
+        results.append({
+            'region': region,
+            'commodity': commodity,
+            'scenario': scenario,
+            sensitivity_cols[0]: values[0],  # Retain the original column name for the initial value
+            **{f'{col}': diff for col, diff in zip(sensitivity_cols[1:], differences)}
+        })
+
+    return pd.DataFrame(results)
+
+supply_diff_df = calculate_sensitivity_differences(supply_df)
+
 # Reshape the data from wide to long format
 def reshape_data(df, value_name):
     df_long = df.melt(id_vars=['region', 'commodity', 'scenario'],
-                      var_name='time',
+                      var_name='supply_step',
                       value_name=value_name)
     return df_long
 
 prices_long = reshape_data(prices_df, 'price')
 demands_long = reshape_data(demands_df, 'demand')
 supply_long = reshape_data(supply_df, 'supply')
+supply_diff_df_long = reshape_data(supply_diff_df, "supply_diff")
 
 # Merge the DataFrames and store nodal information in data_1D_df
-data_1D_df = pd.merge(prices_long, demands_long, on=['region', 'commodity', 'scenario', 'time'])
-data_1D_df = pd.merge(data_1D_df, supply_long, on=['region', 'commodity', 'scenario', 'time'])
+data_1D_df = pd.merge(prices_long, demands_long, on=['region', 'commodity', 'scenario', 'supply_step'])
+data_1D_df = pd.merge(data_1D_df, supply_long, on=['region', 'commodity', 'scenario', 'supply_step'])
+data_1D_df = pd.merge(data_1D_df, supply_diff_df_long, on=['region', 'commodity', 'scenario', 'supply_step'])
+
+# Define a custom order for the supply_step column based on demand scenario
+def get_step_order(supply_step_str):
+    if supply_step_str.startswith('ds_m_'):
+        # For negative demand sensitivity, extract the percentage and convert to negative
+        percentage = int(supply_step_str.split('_')[2])
+        return -percentage
+    elif supply_step_str.startswith('ds_p_'):
+        # For positive demand sensitivity, extract the percentage
+        percentage = int(supply_step_str.split('_')[2])
+        return percentage
+    else:
+        # For other cases, return a large number to place them at the end
+        return float('inf')
+
+# Create a new column with the custom order
+data_1D_df['supply_step_order'] = data_1D_df['supply_step'].apply(get_step_order)
+
+# Sort the DataFrame by the custom order
+data_1D_df = data_1D_df.sort_values('supply_step_order')
+
+# Drop the temporary column used for sorting
+data_1D_df = data_1D_df.drop('supply_step_order', axis=1)
+
+# Reset the index if needed
+data_1D_df = data_1D_df.reset_index(drop=True)
 
 # Read relationship factors
 relationship_df = pd.read_excel(os.path.join(data_path, case_study, "relationship_transport_data.xlsx"), sheet_name='relationship')
 transport_costs = pd.read_excel(os.path.join(data_path, case_study, "relationship_transport_data.xlsx"), sheet_name='transport_costs')
 transport_costs_long = transport_costs.melt(id_vars=['region1', "region2", 'commodity', 'scenario'],
-                    var_name='time')
+                    var_name='supply_step')
 
 data_2D_df = pd.merge(relationship_df, transport_costs_long, on=['region1', 'region2', 'scenario'])
 
@@ -64,12 +142,13 @@ data_2D_df = pd.merge(relationship_df, transport_costs_long, on=['region1', 'reg
 
 print(data_1D_df.head())
 print(data_2D_df.head())
+
 # -----------------------------
 # Prepare nodal datasets from dataframe to xarray
 # -----------------------------
 
 # Identify the dimension columns
-dimension_columns = [col for col in data_1D_df.columns if col in ["region", "commodity", "scenario", "time"]]
+dimension_columns = [col for col in data_1D_df.columns if col in ["region", "commodity", "scenario", "supply_step"]]
 
 # Identify value columns
 value_columns = [col for col in data_1D_df.columns if col not in dimension_columns]
@@ -127,7 +206,7 @@ data_2D_df_reci["region1"], data_2D_df_reci["region2"] = data_2D_df_reci["region
 data_2D_df_combined = pd.concat([data_2D_df, data_2D_df_reci], ignore_index=True)
 
 # Identify the dimension columns
-dimension_columns_2D = [col for col in data_2D_df_combined.columns if col in ["region1", "region2", "commodity", "scenario", "time"]]
+dimension_columns_2D = [col for col in data_2D_df_combined.columns if col in ["region1", "region2", "commodity", "scenario", "supply_step"]]
 
 # Identify value columns
 value_columns_2D = [col for col in data_2D_df_combined.columns if col not in dimension_columns_2D]
@@ -160,23 +239,18 @@ data_2D_combined = xr.Dataset(data_arrays_2D)
 # Remove self-transport (optional)
 data_2D_combined = data_2D_combined.where(data_2D_combined.region1 != data_2D_combined.region2, drop=True)
 
-### Initialize Model ###
-model = linopy.Model()
-
-### Build Transport Graph ###
+### Collect Dimensions ###
 regions = data_1D.region.values
+commodities = data_1D.commodity.values
+scenarios = data_1D.scenario.values
+supply_steps = data_1D.supply_step.values
 
 ### Create Region Pairs ###
 all_pairs = pd.MultiIndex.from_product([regions, regions], names=["region1", "region2"])
 all_pairs = pd.DataFrame(index=all_pairs).reset_index()
 all_pairs = all_pairs[all_pairs.region1 != all_pairs.region2]
 
-### Collect Dimensions ###
-commodities = data_1D.commodity.values
-scenarios = data_1D.scenario.values
-times = data_1D.time.values
-
-extra_dims = pd.MultiIndex.from_product([commodities, scenarios, times], names=["commodity","scenario","time"])
+extra_dims = pd.MultiIndex.from_product([commodities, scenarios, supply_steps], names=["commodity","scenario","supply_step"])
 extra_dims = pd.DataFrame(index=extra_dims).reset_index()
 
 ### Cartesian Expansion ###
@@ -186,21 +260,25 @@ full_pairs = all_pairs.merge(extra_dims, on="key").drop("key", axis=1)
 
 ### Merge Transport Data ###
 pair_df_tmp = data_2D_df_combined.copy()
-data_full = full_pairs.merge(pair_df_tmp, on=["region1", "region2", "commodity", "scenario", "time"], how="left")
+data_full = full_pairs.merge(pair_df_tmp, on=["region1", "region2", "commodity", "scenario", "supply_step"], how="left")
 
 ### Fill Missing Values ###
-DEFAULT_TRANSPORT_COST = 30
-data_full["value"] = data_full["value"].fillna(DEFAULT_TRANSPORT_COST)
+data_full["value"] = data_full["value"].fillna(transport_costs_param)
 np.random.seed(42)
 data_full["value"] += np.random.uniform(0, .001, len(data_full))
 
 ### Convert to xarray ###
-data_2D = data_full.set_index(["region1", "region2", "commodity", "scenario", "time"]).to_xarray()
+data_2D = data_full.set_index(["region1", "region2", "commodity", "scenario", "supply_step"]).to_xarray()
 data_2D = data_2D.reindex(region1=regions, region2=regions)
 
 ### Expand Nodal Data ###
 data_1D_expanded = data_1D.expand_dims(region1=regions, region2=regions)
 data_1D = data_1D.fillna(0)
+
+# Reindex data_2D to match the supply_step coordinates of data_1D_expanded
+data_2D = data_2D.reindex(supply_step=data_1D_expanded.supply_step.values)
+
+# Now merge the datasets
 data_new = xr.merge([data_1D_expanded, data_2D], join="exact")
 data = data_new.fillna(0)
 
@@ -221,43 +299,104 @@ print("\nCoordinate check:")
 print(data_new.region1.values)
 print(data_new.region2.values)
 
-data_2D
-data.sel(region1='EU-FIN', commodity='h2', scenario='Base', time=int(2030))
+# -----------------------------
+# Create price/supply segments
+# -----------------------------
+
+segment_capacity = data_1D["supply_diff"]
+segment_price = data_1D["price"]
+
+# segment_coords = data_1D.coords
+# complete_region_coords = {"region":regions,"commodity":commodities, "scenario":scenarios}
+transport_coords = {"region1":regions, "region2":regions, "commodity":commodities, "scenario":scenarios, "supply_step":supply_steps}
+demand_xr = (data_1D.sel(supply_step=base_step_param, drop=True))
+
+# -----------------------------
+# Build the optimization model
+# -----------------------------
+
+### Initialize Model ###
+model = linopy.Model()
+
 ### Variables ###
-v_production = model.add_variables(
-    lower=0, upper=data_1D["supply"], coords=data_1D.coords, dims=data_1D.dims, name="v_production")
+v_supply_segment = model.add_variables(
+    lower=0,
+    upper=data_1D["supply_diff"],
+    coords=data_1D.coords,
+    dims=data_1D.dims, # region, commodity, scenario, supply_step
+    name="v_supply_segment"
+)
 
 v_transport = model.add_variables(
-    lower=0, coords=data_2D.coords, dims=data_2D.dims, name="v_transport")
+    lower=0,
+    coords=data_2D.coords,
+    dims=data_2D.dims, # region1, region2, commodity, scenario
+    name="v_transport"
+)
 
 v_unmet = model.add_variables(
-    lower=0, coords=data_1D.coords, dims=data_1D.dims, name="v_unmet")
+    lower=0,
+    coords=demand_xr.coords,
+    dims=demand_xr.dims, # region, commodity, scenario
+    name="v_unmet"
+)
 
 ### Flow Accounting ###
-transport_efficiency = .95
-inflow = v_transport.sum(dim="region1").rename(region2="region")
-outflow = v_transport.sum(dim="region2").rename(region1="region")
+transport_efficiency = 0.95
 
-### Diagnostics ###
-net_demand = data_1D_df["supply"].sum() - data_1D_df["demand"].sum()
-if net_demand < 0: print("Warning: demand exceeds supply")
-else: print(f"{net_demand:.2f} excess production")
+# imports into region i:
+inflow = (v_transport.sum("region1").rename(region2="region"))
+# exports from region i:
+outflow = (v_transport.sum("region2").rename(region1="region"))
+# acoounting the export to the supply steps
+exports_by_step=(v_transport.sum("region2").rename(region1="region"))
+
+### Regional Accounting ###
+regional_production = (v_supply_segment.sum(dim="supply_step"))
+regional_import_total = ((inflow * transport_efficiency).sum(dim="supply_step"))
+regional_import_indiv = (v_transport.sum("supply_step").rename(region2="region"))
 
 ### Constraints ###
-c_production = model.add_constraints(
-    v_production <= data_1D["supply"], name="c_supply")
+max_total_dependence_rel = get_settings(parameter="max_total_dependence_rel")
+print("Maximum share of total imports: " + str(int(max_total_dependence_rel*100)) + " %")
+max_indiv_dependence_rel = get_settings(parameter="max_indiv_dependence_rel")
+print("Maximum share of individual imports: " + str(int(max_indiv_dependence_rel*100)) + " %")
+
+# Ensure that the total import share does not exceed 50%
+c_dependence_total = model.add_constraints(
+    (regional_import_total / demand_xr["demand"] <=max_total_dependence_rel),
+    name="c_dependence_total"
+)
+
+# Ensure that the import share from any single region does not exceed 10%
+c_dependence_indiv = model.add_constraints(
+    (regional_import_indiv / demand_xr["demand"] <= max_indiv_dependence_rel),
+    name="c_dependence_indiv"
+)
+
+c_export_link = model.add_constraints(
+    exports_by_step
+    <=
+    v_supply_segment,
+    name="c_export_link"
+)
 
 c_balance = model.add_constraints(
-    v_production - outflow + inflow*transport_efficiency + v_unmet >= data_1D["demand"], name="c_balance")
+    (v_supply_segment
+    - outflow
+    + inflow * transport_efficiency).sum(dim="supply_step")
+    + v_unmet
+    >= demand_xr["demand"],
+    name="c_balance")
 
 ### Objective ###
-production_costs = (v_production * data_1D["price"]
-                    ).sum()
+production_costs = (v_supply_segment * segment_price
+                    ).sum() #dim= explizit definieren manchmal praktisch für Lösung
 
 transport_costs = (v_transport * data_2D["value"] * data_2D["vom_multiplier"]
                    ).sum()
 
-penalty_costs = (v_unmet * 10000).sum()
+penalty_costs = (v_unmet * 100000).sum()
 
 ### Objective Function ###
 obj_fun = model.add_objective(
@@ -270,99 +409,109 @@ sol = model.solution
 if sol is not None:
     print("Solution found")
     print(model.objective)
-    print(sol["v_production"])
+    print(sol["v_supply_segment"])
     print(sol["v_transport"])
 else:
     print("No solution available")
 
+# ==========================
+# Extract shadow prices
+# ==========================
+
+marginals = -model.constraints["c_balance"].dual.copy()
+
+# flip sign only if needed
+if marginals.mean() < 0:
+    marginals = -marginals
+
 ds = model.solution
 regions = ds.region.values
-times_all = ds.time.values
-times = times_all[::2]
+commodity = "h2"
+scenario = "Base"
 
+# Layout
 n = len(regions) + 1
-ncols = 3
-nrows = math.ceil(n / ncols)
-
+ncols, nrows = 3, math.ceil(n/3)
 fig, axes = plt.subplots(nrows, ncols, figsize=(6*ncols,6*nrows))
 axes = np.array(axes).flatten()
 
-ring_width = .12
-base_radius = .5
-
-base_colors = {
-    "production": "#1f77b4",
-    "unmet": "grey",
-    "demand": "#d62728"
-}
-
-cmap = cm.get_cmap("Wistia", len(regions))
-transport_colors = {region: cmap(i) for i, region in enumerate(regions)}
-region_label_colors = {region: cmap(i) for i, region in enumerate(regions)}
-region_label_colors["TOTAL"] = "white"
+# Colors
+base_colors = {"production":"#1f77b4", "unmet":"grey", "demand":"#d62728"}
+cmap = plt.get_cmap("Wistia", len(regions))
+transport_colors = {r:cmap(i) for i,r in enumerate(regions)}
+region_colors = {**{r:cmap(i) for i,r in enumerate(regions)}, "Total":"white"}
 
 legend_handles = [
-    Patch(color=base_colors["production"], label="Production"),
-    Patch(color=base_colors["unmet"], label="Unmet"),
-    Patch(color=base_colors["demand"], label="Demand")
-]
+    Patch(color=base_colors[k], label=k) for k in base_colors.keys()
+] + [Patch(color=transport_colors[r], label=f"Imports from {r}") for r in regions]
 
-for r in regions:
-    legend_handles.append(Patch(color=transport_colors[r], label=f"Import from {r}"))
+def draw_donut(ax, region, title, add_labels=True):
+    production = float(ds["v_supply_segment"].sel(region=region, commodity=commodity, scenario=scenario).sum("supply_step"))
+    unmet = float(ds["v_unmet"].sel(region=region, commodity=commodity, scenario=scenario))
+    demand = float(demand_xr["demand"].sel(region=region, commodity=commodity, scenario=scenario))
+    imports, import_colors = [], []
 
-def draw_donut(ax, region, production_series, unmet_series, demand_series, title):
-    ax.set_title(title, fontsize=11, bbox=dict(boxstyle="round", ec="white", fc=region_label_colors[title]))
-    for j, t in enumerate(times):
-        radius = base_radius + j * ring_width
-        year = str(t)
-        production = float(production_series.sel(time=t))
-        unmet = float(unmet_series.sel(time=t))
-        demand = float(demand_series.sel(time=t))
+    for source in regions:
+        if source == region: continue
+        val = float(ds["v_transport"].sel(region1=source, region2=region, commodity=commodity, scenario=scenario).sum("supply_step"))
+        if val > 1e-6:
+            imports.append(val)
+            import_colors.append(transport_colors[source])
 
-        imports = []
-        import_colors = []
-        for source in regions:
-            if source == region:
-                continue
-            val = float(ds["v_transport"].sel(region1=source, region2=region, commodity="h2", scenario="Base", time=t))
-            if val > 0:
-                imports.append(val)
-                import_colors.append(transport_colors[source])
+    values = [production] + imports + [unmet, demand]
+    colors = [base_colors["production"]] + import_colors + [base_colors["unmet"], base_colors["demand"]]
 
-        values = [production] + imports + [unmet, demand]
-        colors = [base_colors["production"]] + import_colors + [base_colors["unmet"], base_colors["demand"]]
+    ax.set_title(title, fontsize=15, bbox=dict(boxstyle="round", ec="white", fc=region_colors[title]))
+    wedges, _ = ax.pie(values, radius=1, startangle=90, colors=colors, wedgeprops=dict(width=.7, edgecolor="white"))
 
-        wedges, _ = ax.pie(values, radius=radius, startangle=90, colors=colors, wedgeprops=dict(width=ring_width, edgecolor="white"))
-        total = np.sum(values)
-
-        for w, val in zip(wedges, values):
-            if val / total < 0.08:
-                continue
-            theta = (w.theta1 + w.theta2) / 2
-            theta = np.deg2rad(theta)
-            r_text = radius - ring_width / 2
-            x = r_text * np.cos(theta)
-            y = r_text * np.sin(theta)
-            ax.text(x, y, f"{val:.0f}\n{year}", ha="center", va="center", fontsize=6)
+    total = np.sum(values)
+    for w, val in zip(wedges, values):
+        if val/total < .05: continue
+        theta = np.deg2rad((w.theta1+w.theta2)/2)
+        x, y = .72*np.cos(theta), .72*np.sin(theta)
+        if add_labels:
+            ax.text(x, y, f"{val:.0f}", ha="center", va="center", fontsize=11)
     ax.set(aspect="equal")
 
+# Regional plots
 for i, region in enumerate(regions):
-    production = ds["v_production"].sel(region=region, commodity="h2", scenario="Base")
-    unmet = ds["v_unmet"].sel(region=region, commodity="h2", scenario="Base")
-    demand = data_1D["demand"].sel(region=region, commodity="h2", scenario="Base")
-    draw_donut(axes[i], region, production, unmet, demand, region)
+    draw_donut(axes[i], region, region)
 
-total_production = ds["v_production"].sel(commodity="h2", scenario="Base").sum("region")
-total_unmet = ds["v_unmet"].sel(commodity="h2", scenario="Base").sum("region")
-total_demand = data_1D["demand"].sel(commodity="h2", scenario="Base").sum("region")
-draw_donut(axes[len(regions)], regions[0], total_production, total_unmet, total_demand, "TOTAL")
+# TOTAL plot
+total_production = float(ds["v_supply_segment"].sel(commodity=commodity, scenario=scenario).sum())
+total_unmet = float(ds["v_unmet"].sel(commodity=commodity, scenario=scenario).sum())
+total_demand = float(demand_xr["demand"].sel(commodity=commodity, scenario=scenario).sum())
+imports, import_colors = [], []
 
-for j in range(len(regions) + 1, len(axes)):
-    fig.delaxes(axes[j])
+for source in regions:
+    val = float(ds["v_transport"].sel(region1=source, commodity=commodity, scenario=scenario).sum())
+    if val > 1e-6:
+        imports.append(val)
+        import_colors.append(transport_colors[source])
+
+values = [total_production] + imports + [total_unmet, total_demand]
+colors = [base_colors["production"]] + import_colors + [base_colors["unmet"], base_colors["demand"]]
+
+ax = axes[len(regions)]
+ax.set_title("Total", bbox=dict(boxstyle="round", fc="white"))
+wedges, _ = ax.pie(values, radius=1, startangle=90, colors=colors, wedgeprops=dict(width=.7, edgecolor="white"))
+ax.set(aspect="equal")
+
+# Add labels to TOTAL plot
+total = np.sum(values)
+for w, val in zip(wedges, values):
+    if val/total < .05: continue
+    theta = np.deg2rad((w.theta1+w.theta2)/2)
+    x, y = .72*np.cos(theta), .72*np.sin(theta)
+    ax.text(x, y, f"{val:.0f}", ha="center", va="center", fontsize=11)
+
+# Cleanup
+for i in range(len(regions)+1, len(axes)):
+    fig.delaxes(axes[i])
 
 fig.legend(handles=legend_handles, loc="center right")
 plt.tight_layout()
-plt.subplots_adjust(right=.83)
+plt.subplots_adjust(right=.84)
 
 # Save the plot as a PNG file in the figures subfolder
 file_path = os.path.join(output_path, f"Production_transport_demand_balance_{case_study.replace(' ', '_')}.png")
@@ -370,109 +519,274 @@ if os.path.exists(file_path):
     os.remove(file_path)
 plt.savefig(file_path, dpi=300, bbox_inches='tight')
 plt.ioff()
-plt.show()
 
-# Your existing code for creating the plot
-ds = model.solution
-regions = ds.region.values
-times_all = ds.time.values
-times = times_all[::2]
+sns.set_style("whitegrid")
 
-n = len(regions) + 1
-ncols = 3
-nrows = math.ceil(n / ncols)
+commodity,scenario="h2","Base"
 
-fig, axes = plt.subplots(nrows, ncols, figsize=(6*ncols,6*nrows))
-axes = np.array(axes).flatten()
+# ----- price + demand -----
 
-bar_width = 1
-index = np.arange(len(times))
+market_price=abs(
+    model.constraints["c_balance"]
+    .dual
+    .sel(
+        region=reference_region,
+        commodity=commodity,
+        scenario=scenario
+    )
+    .item()
+)
 
-base_colors = {
-    "production": "#1f77b4",
-    "unmet": "grey",
-    "demand": "#d62728"
-}
+demand=(
+    demand_xr["demand"]
+    .sel(
+        region=reference_region,
+        commodity=commodity,
+        scenario=scenario
+    )
+    .item()
+)
 
-cmap = cm.get_cmap("Wistia", len(regions))
-transport_colors = {region: cmap(i) for i, region in enumerate(regions)}
-region_label_colors = {region: cmap(i) for i, region in enumerate(regions)}
-region_label_colors["TOTAL"] = "white"
+# ----- local production -----
 
-legend_handles = [
-    Patch(color=base_colors["production"], label="Production"),
-    Patch(color=base_colors["unmet"], label="Unmet"),
-    Patch(color=base_colors["demand"], label="Demand")
+prod=(sol["v_supply_segment"]
+    .sel(region=reference_region)
+    .to_dataframe("quantity")
+    .reset_index()
+)
+
+prod=prod[prod.quantity>1e-6]
+
+prod=prod.merge(
+    data_1D["price"]
+    .sel(region=reference_region)
+    .to_dataframe("production_cost")
+    .reset_index(),
+    on=["commodity","scenario","supply_step"]
+)
+
+prod["source"]=reference_region
+prod["transport_cost"]=0
+prod["kind"]="Local"
+
+# ----- imports -----
+
+imp=(sol["v_transport"]
+    .sel(region2=reference_region)
+    .to_dataframe("quantity")
+    .reset_index()
+)
+
+imp=imp[
+    (imp.quantity>1e-6)
+    &(imp.region1!=reference_region)
 ]
 
-for r in regions:
-    legend_handles.append(Patch(color=transport_colors[r], label=f"Import from {r}"))
+if len(imp):
 
-def draw_stacked_bar(ax, region, production_series, unmet_series, demand_series, title):
-    ax.set_title(title, fontsize=11, bbox=dict(boxstyle="round", ec="white", fc=region_label_colors[title]))
-    bottom = np.zeros(len(times))
+    imp=imp.merge(
+        data_1D["price"]
+        .to_dataframe("production_cost")
+        .reset_index()
+        .rename(columns={"region":"region1"}),
+        on=[
+            "region1",
+            "commodity",
+            "scenario",
+            "supply_step"
+        ]
+    )
 
-    for j, t in enumerate(times):
-        year = str(t)
-        production = float(production_series.sel(time=t))
-        unmet = float(unmet_series.sel(time=t))
-        demand = float(demand_series.sel(time=t))
+    imp=imp.merge(
+        data_2D["value"]
+        .to_dataframe("transport_cost")
+        .reset_index(),
+        on=[
+            "region1",
+            "region2",
+            "commodity",
+            "scenario",
+            "supply_step"
+        ]
+    )
 
-        imports = []
-        import_colors = []
-        for source in regions:
-            if source == region:
-                continue
-            val = float(ds["v_transport"].sel(region1=source, region2=region, commodity="h2", scenario="Base", time=t))
-            if val > 0:
-                imports.append(val)
-                import_colors.append(transport_colors[source])
+    imp["source"]=imp.region1
+    imp["kind"]="Import"
 
-        values = [production] + imports + [unmet, demand]
-        colors = [base_colors["production"]] + import_colors + [base_colors["unmet"], base_colors["demand"]]
+else:
 
-        for val, color in zip(values, colors):
-            ax.bar(j, val, bottom=bottom[j], width=bar_width, color=color, edgecolor="white")
-            bottom[j] += val
+    imp=pd.DataFrame(columns=[
+        "source",
+        "quantity",
+        "production_cost",
+        "transport_cost",
+        "kind",
+        "supply_step"
+    ])
 
-        total = np.sum(values)
-        for k, val in enumerate(values):
-            if val / total < 0.08:
-                continue
-            ax.text(j, bottom[j] - val / 2, f"{val:.0f}\n{year}", ha="center", va="center", fontsize=6, color="white")
+# ----- stack -----
 
-    ax.set_xticks(index)
-    ax.set_xticklabels(times)
-    ax.set_xlabel("Time")
-    ax.set_ylabel("Quantity")
-    ax.set_ylim(0, np.max(bottom) * 1.1)
+cols=[
+    "source",
+    "quantity",
+    "production_cost",
+    "transport_cost",
+    "kind",
+    "supply_step"
+]
 
-for i, region in enumerate(regions):
-    production = ds["v_production"].sel(region=region, commodity="h2", scenario="Base")
-    unmet = ds["v_unmet"].sel(region=region, commodity="h2", scenario="Base")
-    demand = data_1D["demand"].sel(region=region, commodity="h2", scenario="Base")
-    draw_stacked_bar(axes[i], region, production, unmet, demand, region)
+stack=pd.concat(
+    [prod[cols],imp[cols]],
+    ignore_index=True
+)
 
-total_production = ds["v_production"].sel(commodity="h2", scenario="Base").sum("region")
-total_unmet = ds["v_unmet"].sel(commodity="h2", scenario="Base").sum("region")
-total_demand = data_1D["demand"].sel(commodity="h2", scenario="Base").sum("region")
-draw_stacked_bar(axes[len(regions)], regions[0], total_production, total_unmet, total_demand, "TOTAL")
+stack["delivered_cost"]=(
+    stack.production_cost+
+    stack.transport_cost
+)
 
-for j in range(len(regions) + 1, len(axes)):
-    fig.delaxes(axes[j])
+stack=stack.sort_values(
+    "delivered_cost"
+)
 
-fig.legend(handles=legend_handles, loc="center right")
+stack["end"]=stack.quantity.cumsum()
+stack["start"]=stack.end-stack.quantity
+
+# ----- plot -----
+
+fig,ax=plt.subplots(figsize=(16,8))
+
+colors={
+    "Local":"tab:blue",
+    "Import":"tab:orange"
+}
+
+for _,r in stack.iterrows():
+
+    ax.bar(
+        r.start,
+        r.production_cost,
+        width=r.quantity,
+        align="edge",
+        color=colors[r.kind]
+    )
+
+    if r.transport_cost>1e-6:
+
+        ax.bar(
+            r.start,
+            r.transport_cost,
+            width=r.quantity,
+            align="edge",
+            bottom=r.production_cost,
+            color="red",
+            alpha=.5
+        )
+
+    txt=(
+        f"{r.source}"
+        f"\n{r.supply_step}"
+        f"\nQ={r.quantity:.1f}"
+        f"\nP={r.production_cost:.1f}"
+    )
+
+    if r.transport_cost>0:
+        txt += (
+            f"\nT={r.transport_cost:.1f}"
+        )
+
+    txt += (
+        f"\nΣ={r.delivered_cost:.1f}"
+    )
+
+    ax.text(
+            r.start+r.quantity/2,
+            r.delivered_cost+2,
+            txt,
+            fontsize=8,
+            rotation=90,
+            ha="center"
+        )
+
+# demand line + label
+
+ax.axvline(
+    demand,
+    c="black",
+    ls="--",
+    lw=3
+)
+
+ax.text(
+    demand,
+    ax.get_ylim()[1]*0.95,
+    f"Demand\n{demand:.1f}",
+    rotation=90,
+    va="top",
+    ha="right",
+    fontweight="bold"
+)
+
+# price line + label
+
+ax.axhline(
+    market_price,
+    c="green",
+    ls=":",
+    lw=3
+)
+
+ax.text(
+    stack.end.max()*0.98,
+    market_price,
+    f"{market_price:.1f} €/MWh",
+    color="green",
+    ha="right",
+    va="bottom",
+    fontsize=11,
+    fontweight="bold",
+    bbox=dict(
+        facecolor="white",
+        edgecolor="green",
+        alpha=.8
+    )
+)
+
+# marginal supplier
+
+mb=stack[stack.end>=demand]
+
+if len(mb):
+
+    mb=mb.iloc[0]
+
+    ax.axvspan(
+        mb.start,
+        mb.end,
+        alpha=.15,
+        color="green"
+    )
+
+ax.set(
+    xlabel="Quantity",
+    ylabel="Delivered cost €/MWh",
+    title=f"Supply composition: {reference_region}"
+)
+
+ax.legend(handles=[
+    Patch(color="tab:blue",label="Local"),
+    Patch(color="tab:orange",label="Import"),
+    Patch(color="red",label="Transport")
+])
+
 plt.tight_layout()
-plt.subplots_adjust(right=.83)
-
 # Save the plot as a PNG file in the figures subfolder
-file_path = os.path.join(output_path, f"Production_transport_demand_columns_{case_study.replace(' ', '_')}.png")
-# Remove the file if it already exists
+file_path = os.path.join(output_path, f"Supply_composition_{reference_region}_{case_study.replace(' ', '_')}.png")
 if os.path.exists(file_path):
     os.remove(file_path)
-plt.savefig(file_path, dpi=300)  # bbox_inches='tight' is commented out
-print(f"Plot saved successfully at {file_path}")
+plt.savefig(file_path, dpi=300, bbox_inches='tight')
 plt.ioff()
+plt.show() 
 
 #%%
 STOP = time.perf_counter()

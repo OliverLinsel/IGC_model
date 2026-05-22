@@ -221,8 +221,10 @@ print("\nCoordinate check:")
 print(data_new.region1.values)
 print(data_new.region2.values)
 
-data_2D
-data.sel(region1='EU-FIN', commodity='h2', scenario='Base', time=int(2030))
+# -----------------------------
+# Build the optimization model
+# -----------------------------
+
 ### Variables ###
 v_production = model.add_variables(
     lower=0, upper=data_1D["supply"], coords=data_1D.coords, dims=data_1D.dims, name="v_production")
