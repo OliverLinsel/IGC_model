@@ -13,6 +13,7 @@ from matplotlib.patches import Patch
 from matplotlib import cm
 import math
 import matplotlib.pyplot as plt, pandas as pd, seaborn as sns
+from model_io import load_model_run, save_model_run, save_complete_model, load_complete_model
 
 START = time.perf_counter()
 
@@ -115,6 +116,7 @@ def get_step_order(supply_step_str):
     else:
         # For other cases, return a large number to place them at the end
         return float('inf')
+
 
 # Create a new column with the custom order
 data_1D_df['supply_step_order'] = data_1D_df['supply_step'].apply(get_step_order)
@@ -311,108 +313,146 @@ segment_price = data_1D["price"]
 transport_coords = {"region1":regions, "region2":regions, "commodity":commodities, "scenario":scenarios, "supply_step":supply_steps}
 demand_xr = (data_1D.sel(supply_step=base_step_param, drop=True))
 
-# -----------------------------
-# Build the optimization model
-# -----------------------------
+def build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, max_total_dependence_rel = 1, max_indiv_dependence_rel = 1):
+    # -----------------------------
+    # Build the optimization model
+    # -----------------------------
 
-### Initialize Model ###
-model = linopy.Model()
+    ### Initialize Model ###
+    model = linopy.Model()
+    #identify number of individual regions
+    n = len(data_1D.region.values)
 
-### Variables ###
-v_supply_segment = model.add_variables(
-    lower=0,
-    upper=data_1D["supply_diff"],
-    coords=data_1D.coords,
-    dims=data_1D.dims, # region, commodity, scenario, supply_step
-    name="v_supply_segment"
-)
+    ### Variables ###
+    v_supply_segment = model.add_variables(
+        lower=0,
+        upper=data_1D["supply_diff"],
+        coords=data_1D.coords,
+        dims=data_1D.dims, # region, commodity, scenario, supply_step
+        name="v_supply_segment"
+    )
 
-v_transport = model.add_variables(
-    lower=0,
-    coords=data_2D.coords,
-    dims=data_2D.dims, # region1, region2, commodity, scenario
-    name="v_transport"
-)
+    v_transport = model.add_variables(
+        lower=0,
+        coords=data_2D.coords,
+        dims=data_2D.dims, # region1, region2, commodity, scenario
+        name="v_transport"
+    )
 
-v_unmet = model.add_variables(
-    lower=0,
-    coords=demand_xr.coords,
-    dims=demand_xr.dims, # region, commodity, scenario
-    name="v_unmet"
-)
+    v_unmet = model.add_variables(
+        lower=0,
+        coords=demand_xr.coords,
+        dims=demand_xr.dims, # region, commodity, scenario
+        name="v_unmet"
+    )
 
-### Flow Accounting ###
-transport_efficiency = 0.95
+    ### Flow Accounting ###
+    transport_efficiency = 0.95
 
-# imports into region i:
-inflow = (v_transport.sum("region1").rename(region2="region"))
-# exports from region i:
-outflow = (v_transport.sum("region2").rename(region1="region"))
-# acoounting the export to the supply steps
-exports_by_step=(v_transport.sum("region2").rename(region1="region"))
+    # imports into region i:
+    inflow = (v_transport.sum("region1").rename(region2="region"))
+    # exports from region i:
+    outflow = (v_transport.sum("region2").rename(region1="region"))
 
-### Regional Accounting ###
-regional_production = (v_supply_segment.sum(dim="supply_step"))
-regional_import_total = ((inflow * transport_efficiency).sum(dim="supply_step"))
-regional_import_indiv = (v_transport.sum("supply_step").rename(region2="region"))
+    exports_by_step=(
+        v_transport
+        .sum("region2")
+        .rename(region1="region")
+    )
 
-### Constraints ###
-max_total_dependence_rel = get_settings(parameter="max_total_dependence_rel")
-print("Maximum share of total imports: " + str(int(max_total_dependence_rel*100)) + " %")
-max_indiv_dependence_rel = get_settings(parameter="max_indiv_dependence_rel")
-print("Maximum share of individual imports: " + str(int(max_indiv_dependence_rel*100)) + " %")
+    ### Regional Accounting ###
+    regional_production = (v_supply_segment.sum(dim="supply_step"))
+    regional_import_total = ((inflow * transport_efficiency).sum(dim="supply_step"))
+    regional_import_indiv = (v_transport.sum("supply_step").rename(region2="region"))
 
-# Ensure that the total import share does not exceed 50%
-c_dependence_total = model.add_constraints(
-    (regional_import_total / demand_xr["demand"] <=max_total_dependence_rel),
-    name="c_dependence_total"
-)
+    # -----------------------------
+    # Implement derivative conversion efficiencies
+    # -----------------------------
 
-# Ensure that the import share from any single region does not exceed 10%
-c_dependence_indiv = model.add_constraints(
-    (regional_import_indiv / demand_xr["demand"] <= max_indiv_dependence_rel),
-    name="c_dependence_indiv"
-)
+    ### Conversion efficiencies for hydrogen and derivatives ###
 
-c_export_link = model.add_constraints(
-    exports_by_step
-    <=
-    v_supply_segment,
-    name="c_export_link"
-)
+    ### retain total consumption constraint ###
 
-c_balance = model.add_constraints(
-    (v_supply_segment
-    - outflow
-    + inflow * transport_efficiency).sum(dim="supply_step")
-    + v_unmet
-    >= demand_xr["demand"],
-    name="c_balance")
+    ### Constraints ###
+    # max_total_dependence_rel = get_settings(case_study_arg=case_study, parameter="max_total_dependence_rel")
+    print("Maximum share of total imports: " + str(int(max_total_dependence_rel*100)) + " %")
+    # max_indiv_dependence_rel = get_settings(case_study_arg=case_study, parameter="max_indiv_dependence_rel")
+    print("Maximum share of individual imports: " + str(int(max_indiv_dependence_rel*100)) + " %")
 
-### Objective ###
-production_costs = (v_supply_segment * segment_price
-                    ).sum() #dim= explizit definieren manchmal praktisch für Lösung
+    # Ensure that the total import share does not exceed 50%
+    c_dependence_total = model.add_constraints(
+        (regional_import_total / demand_xr["demand"] <=max_total_dependence_rel),
+        name="c_dependence_total"
+    )
 
-transport_costs = (v_transport * data_2D["value"] * data_2D["vom_multiplier"]
-                   ).sum()
+    # Ensure that the import share from any single region does not exceed 10%
+    c_dependence_indiv = model.add_constraints(
+        (regional_import_indiv / demand_xr["demand"] <= max_indiv_dependence_rel),
+        name="c_dependence_indiv"
+    )
 
-penalty_costs = (v_unmet * 100000).sum()
+    c_export_link = model.add_constraints(
+        exports_by_step
+        <=
+        v_supply_segment,
+        name="c_export_link"
+    )
 
-### Objective Function ###
-obj_fun = model.add_objective(
-    production_costs + transport_costs + penalty_costs, sense="min")
+    c_balance = model.add_constraints(
+        (v_supply_segment
+        - outflow
+        + inflow * transport_efficiency).sum(dim="supply_step")
+        + v_unmet
+        == demand_xr["demand"],
+        name="c_balance")
 
-### Solve ###
-model.solve(solver_name="gurobi")
-sol = model.solution
+    ### Objective ###
+    production_costs = (v_supply_segment * segment_price
+                        ).sum() #dim= explizit definieren manchmal praktisch für Lösung
 
-if sol is not None:
-    print("Solution found")
-    print(model.objective)
-    print(sol["v_supply_segment"])
-    print(sol["v_transport"])
-else:
-    print("No solution available")
+    transport_costs = (v_transport * data_2D["value"] * data_2D["vom_multiplier"]
+                    ).sum()
+
+    penalty_costs = (v_unmet * 100000).sum()
+
+    ### Objective Function ###
+    obj_fun = model.add_objective(
+        production_costs + transport_costs + penalty_costs, sense="min")
+
+    ### Solve ###
+    model.solve(solver_name="gurobi")
+    solution = model.solution
+
+    if solution is not None:
+        print("Solution found")
+        print(model.objective)
+        print(solution["v_supply_segment"])
+        print(solution["v_transport"])
+        #define model run name
+        name = f"model_run_{n}n_{case_study}_{max_total_dependence_rel*100:.0f}_{max_indiv_dependence_rel*100:.0f}"
+        #save solution to file
+        save_model_run(output_path, data_1D, data_2D, solution, name,
+                    meta={"solver": "gurobi",
+                            "case_study": case_study,
+                            "max_total_dependence_rel": max_total_dependence_rel,
+                            "max_indiv_dependence_rel": max_indiv_dependence_rel
+                            })
+        save_complete_model(model, output_path, name)
+    else:
+        print("No solution available")
+    return model, solution
+
+model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price)
+
+total_dep_list = [0, 0.2, 0.4, 0.6, 0.8, 1]
+indiv_dep_list = [0, 0.2, 0.4, 0.6, 0.8, 1]
+
+# Execute sensitivity analysis for dependency parameters
+for t_d in total_dep_list:
+    for i_d in indiv_dep_list:
+        print("Execute optimization for dependency parameters: " + str(t_d) + "_" + str(i_d))
+        model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, t_d, i_d)
+        print("Optimization successfull")
 
 # ==========================
 # Extract shadow prices
@@ -424,369 +464,7 @@ marginals = -model.constraints["c_balance"].dual.copy()
 if marginals.mean() < 0:
     marginals = -marginals
 
-ds = model.solution
-regions = ds.region.values
-commodity = "h2"
-scenario = "Base"
-
-# Layout
-n = len(regions) + 1
-ncols, nrows = 3, math.ceil(n/3)
-fig, axes = plt.subplots(nrows, ncols, figsize=(6*ncols,6*nrows))
-axes = np.array(axes).flatten()
-
-# Colors
-base_colors = {"production":"#1f77b4", "unmet":"grey", "demand":"#d62728"}
-cmap = plt.get_cmap("Wistia", len(regions))
-transport_colors = {r:cmap(i) for i,r in enumerate(regions)}
-region_colors = {**{r:cmap(i) for i,r in enumerate(regions)}, "Total":"white"}
-
-legend_handles = [
-    Patch(color=base_colors[k], label=k) for k in base_colors.keys()
-] + [Patch(color=transport_colors[r], label=f"Imports from {r}") for r in regions]
-
-def draw_donut(ax, region, title, add_labels=True):
-    production = float(ds["v_supply_segment"].sel(region=region, commodity=commodity, scenario=scenario).sum("supply_step"))
-    unmet = float(ds["v_unmet"].sel(region=region, commodity=commodity, scenario=scenario))
-    demand = float(demand_xr["demand"].sel(region=region, commodity=commodity, scenario=scenario))
-    imports, import_colors = [], []
-
-    for source in regions:
-        if source == region: continue
-        val = float(ds["v_transport"].sel(region1=source, region2=region, commodity=commodity, scenario=scenario).sum("supply_step"))
-        if val > 1e-6:
-            imports.append(val)
-            import_colors.append(transport_colors[source])
-
-    values = [production] + imports + [unmet, demand]
-    colors = [base_colors["production"]] + import_colors + [base_colors["unmet"], base_colors["demand"]]
-
-    ax.set_title(title, fontsize=15, bbox=dict(boxstyle="round", ec="white", fc=region_colors[title]))
-    wedges, _ = ax.pie(values, radius=1, startangle=90, colors=colors, wedgeprops=dict(width=.7, edgecolor="white"))
-
-    total = np.sum(values)
-    for w, val in zip(wedges, values):
-        if val/total < .05: continue
-        theta = np.deg2rad((w.theta1+w.theta2)/2)
-        x, y = .72*np.cos(theta), .72*np.sin(theta)
-        if add_labels:
-            ax.text(x, y, f"{val:.0f}", ha="center", va="center", fontsize=11)
-    ax.set(aspect="equal")
-
-# Regional plots
-for i, region in enumerate(regions):
-    draw_donut(axes[i], region, region)
-
-# TOTAL plot
-total_production = float(ds["v_supply_segment"].sel(commodity=commodity, scenario=scenario).sum())
-total_unmet = float(ds["v_unmet"].sel(commodity=commodity, scenario=scenario).sum())
-total_demand = float(demand_xr["demand"].sel(commodity=commodity, scenario=scenario).sum())
-imports, import_colors = [], []
-
-for source in regions:
-    val = float(ds["v_transport"].sel(region1=source, commodity=commodity, scenario=scenario).sum())
-    if val > 1e-6:
-        imports.append(val)
-        import_colors.append(transport_colors[source])
-
-values = [total_production] + imports + [total_unmet, total_demand]
-colors = [base_colors["production"]] + import_colors + [base_colors["unmet"], base_colors["demand"]]
-
-ax = axes[len(regions)]
-ax.set_title("Total", bbox=dict(boxstyle="round", fc="white"))
-wedges, _ = ax.pie(values, radius=1, startangle=90, colors=colors, wedgeprops=dict(width=.7, edgecolor="white"))
-ax.set(aspect="equal")
-
-# Add labels to TOTAL plot
-total = np.sum(values)
-for w, val in zip(wedges, values):
-    if val/total < .05: continue
-    theta = np.deg2rad((w.theta1+w.theta2)/2)
-    x, y = .72*np.cos(theta), .72*np.sin(theta)
-    ax.text(x, y, f"{val:.0f}", ha="center", va="center", fontsize=11)
-
-# Cleanup
-for i in range(len(regions)+1, len(axes)):
-    fig.delaxes(axes[i])
-
-fig.legend(handles=legend_handles, loc="center right")
-plt.tight_layout()
-plt.subplots_adjust(right=.84)
-
-# Save the plot as a PNG file in the figures subfolder
-file_path = os.path.join(output_path, f"Production_transport_demand_balance_{case_study.replace(' ', '_')}.png")
-if os.path.exists(file_path):
-    os.remove(file_path)
-plt.savefig(file_path, dpi=300, bbox_inches='tight')
-plt.ioff()
-
-sns.set_style("whitegrid")
-
-commodity,scenario="h2","Base"
-
-# ----- price + demand -----
-
-market_price=abs(
-    model.constraints["c_balance"]
-    .dual
-    .sel(
-        region=reference_region,
-        commodity=commodity,
-        scenario=scenario
-    )
-    .item()
-)
-
-demand=(
-    demand_xr["demand"]
-    .sel(
-        region=reference_region,
-        commodity=commodity,
-        scenario=scenario
-    )
-    .item()
-)
-
-# ----- local production -----
-
-prod=(sol["v_supply_segment"]
-    .sel(region=reference_region)
-    .to_dataframe("quantity")
-    .reset_index()
-)
-
-prod=prod[prod.quantity>1e-6]
-
-prod=prod.merge(
-    data_1D["price"]
-    .sel(region=reference_region)
-    .to_dataframe("production_cost")
-    .reset_index(),
-    on=["commodity","scenario","supply_step"]
-)
-
-prod["source"]=reference_region
-prod["transport_cost"]=0
-prod["kind"]="Local"
-
-# ----- imports -----
-
-imp=(sol["v_transport"]
-    .sel(region2=reference_region)
-    .to_dataframe("quantity")
-    .reset_index()
-)
-
-imp=imp[
-    (imp.quantity>1e-6)
-    &(imp.region1!=reference_region)
-]
-
-if len(imp):
-
-    imp=imp.merge(
-        data_1D["price"]
-        .to_dataframe("production_cost")
-        .reset_index()
-        .rename(columns={"region":"region1"}),
-        on=[
-            "region1",
-            "commodity",
-            "scenario",
-            "supply_step"
-        ]
-    )
-
-    imp=imp.merge(
-        data_2D["value"]
-        .to_dataframe("transport_cost")
-        .reset_index(),
-        on=[
-            "region1",
-            "region2",
-            "commodity",
-            "scenario",
-            "supply_step"
-        ]
-    )
-
-    imp["source"]=imp.region1
-    imp["kind"]="Import"
-
-else:
-
-    imp=pd.DataFrame(columns=[
-        "source",
-        "quantity",
-        "production_cost",
-        "transport_cost",
-        "kind",
-        "supply_step"
-    ])
-
-# ----- stack -----
-
-cols=[
-    "source",
-    "quantity",
-    "production_cost",
-    "transport_cost",
-    "kind",
-    "supply_step"
-]
-
-stack=pd.concat(
-    [prod[cols],imp[cols]],
-    ignore_index=True
-)
-
-stack["delivered_cost"]=(
-    stack.production_cost+
-    stack.transport_cost
-)
-
-stack=stack.sort_values(
-    "delivered_cost"
-)
-
-stack["end"]=stack.quantity.cumsum()
-stack["start"]=stack.end-stack.quantity
-
-# ----- plot -----
-
-fig,ax=plt.subplots(figsize=(16,8))
-
-colors={
-    "Local":"tab:blue",
-    "Import":"tab:orange"
-}
-
-for _,r in stack.iterrows():
-
-    ax.bar(
-        r.start,
-        r.production_cost,
-        width=r.quantity,
-        align="edge",
-        color=colors[r.kind]
-    )
-
-    if r.transport_cost>1e-6:
-
-        ax.bar(
-            r.start,
-            r.transport_cost,
-            width=r.quantity,
-            align="edge",
-            bottom=r.production_cost,
-            color="red",
-            alpha=.5
-        )
-
-    txt=(
-        f"{r.source}"
-        f"\n{r.supply_step}"
-        f"\nQ={r.quantity:.1f}"
-        f"\nP={r.production_cost:.1f}"
-    )
-
-    if r.transport_cost>0:
-        txt += (
-            f"\nT={r.transport_cost:.1f}"
-        )
-
-    txt += (
-        f"\nΣ={r.delivered_cost:.1f}"
-    )
-
-    ax.text(
-            r.start+r.quantity/2,
-            r.delivered_cost+2,
-            txt,
-            fontsize=8,
-            rotation=90,
-            ha="center"
-        )
-
-# demand line + label
-
-ax.axvline(
-    demand,
-    c="black",
-    ls="--",
-    lw=3
-)
-
-ax.text(
-    demand,
-    ax.get_ylim()[1]*0.95,
-    f"Demand\n{demand:.1f}",
-    rotation=90,
-    va="top",
-    ha="right",
-    fontweight="bold"
-)
-
-# price line + label
-
-ax.axhline(
-    market_price,
-    c="green",
-    ls=":",
-    lw=3
-)
-
-ax.text(
-    stack.end.max()*0.98,
-    market_price,
-    f"{market_price:.1f} €/MWh",
-    color="green",
-    ha="right",
-    va="bottom",
-    fontsize=11,
-    fontweight="bold",
-    bbox=dict(
-        facecolor="white",
-        edgecolor="green",
-        alpha=.8
-    )
-)
-
-# marginal supplier
-
-mb=stack[stack.end>=demand]
-
-if len(mb):
-
-    mb=mb.iloc[0]
-
-    ax.axvspan(
-        mb.start,
-        mb.end,
-        alpha=.15,
-        color="green"
-    )
-
-ax.set(
-    xlabel="Quantity",
-    ylabel="Delivered cost €/MWh",
-    title=f"Supply composition: {reference_region}"
-)
-
-ax.legend(handles=[
-    Patch(color="tab:blue",label="Local"),
-    Patch(color="tab:orange",label="Import"),
-    Patch(color="red",label="Transport")
-])
-
-plt.tight_layout()
-# Save the plot as a PNG file in the figures subfolder
-file_path = os.path.join(output_path, f"Supply_composition_{reference_region}_{case_study.replace(' ', '_')}.png")
-if os.path.exists(file_path):
-    os.remove(file_path)
-plt.savefig(file_path, dpi=300, bbox_inches='tight')
-plt.ioff()
-plt.show() 
+print(marginals)
 
 #%%
 STOP = time.perf_counter()

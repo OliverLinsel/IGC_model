@@ -18,8 +18,8 @@ defaults = {
     "transport_costs": 30,  # €/MWh
     "commodity_price": 50,  # €/MWh
     "base_step":"ds_p_0",   # define the base step that contains e.g. the fixed demand
-    "max_total_dependence_rel": 0.5, #maximum share that may be imported to one region from all other regions
-    "max_indiv_dependence_rel": 0.2, #maximum share that may be imported to one region from another region
+    "max_total_dependence_rel": 0.4, #maximum share that may be imported to one region from all other regions
+    "max_indiv_dependence_rel": 0.1, #maximum share that may be imported to one region from another region
 }
 
 ### Define case study specific parameters ###
@@ -30,8 +30,8 @@ case_studies = {
         "transport_costs": 25,  # €/MWh
         "commodity_price": 45,  # €/MWh
         "base_step":"ds_p_0",   # define the base step that contains e.g. the fixed demand
-        "max_total_dependence_rel": 0.5, #maximum share that may be imported to one region from all other regions
-        "max_indiv_dependence_rel": 0.2, #maximum share that may be imported to one region from another region
+        "max_total_dependence_rel": 1, #maximum share that may be imported to one region from all other regions
+        "max_indiv_dependence_rel": 1, #maximum share that may be imported to one region from another region
     },
     "igc_nrw": {
         "case_study": "igc_nrw",# return case study name if required for e.g. visualizations
