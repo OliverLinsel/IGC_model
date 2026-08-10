@@ -1,6 +1,6 @@
 ##### geoscope_template_module #####
 #orginated by OL 10.03.2026
-
+#%%
 #This is the network module created for the IGC.NRW research project. It is subdivided into four submodules: Determining the geoscope, Creating the path template, creating the sources and creating the sinks.
 #Additionally there is a visualization script to check the created data and the resulting network. The module is designed to be flexible and adaptable to different scenarios and data inputs, while also being efficient and scalable for larger datasets.
 
@@ -40,12 +40,12 @@ def get_geoscope(data_path=os.path.join("data_module", "Data"), case_study=case_
     geoscope_gdf_agg = geoscope_gdf_agg[["geometry"]].set_crs(epsg=epsg)
     return geoscope_gdf_high_res, geoscope_gdf_agg
 
-def visualize_geoscope(geoscope_gdf):
+def visualize_geoscope(geoscope_gdf, case_study = "igc_nrw"):
     geoscope_gdf['index'] = geoscope_gdf.index
     geoscope_gdf.plot(column='index', cmap="viridis")
     plt.ioff()
     plt.draw()
-    # plt.savefig("geoscope_geoplot.png", dpi=300)
+    plt.savefig(os.path.join("network_module", "figures", f"{case_study}_geoscope_geoplot.png"), dpi=300)
     # geoscope_gdf.to_clipboard()
     return
 
@@ -53,8 +53,10 @@ work_geoscope_gdf_high_res, work_geoscope_gdf_agg = get_geoscope()
 print("The disaggregated dataframe looks like this: " + str(work_geoscope_gdf_high_res) + "\n")
 print("The aggregated dataframe looks like this: " + str(work_geoscope_gdf_agg) + "\n")
 
-visualize_geoscope(work_geoscope_gdf_high_res)
-visualize_geoscope(work_geoscope_gdf_agg)
+visualize_geoscope(work_geoscope_gdf_high_res, case_study)
+visualize_geoscope(work_geoscope_gdf_agg, case_study)
 
 STOP = time.perf_counter()
 print('Total execution time of script',round((STOP-START), 1), 's')
+
+#%%

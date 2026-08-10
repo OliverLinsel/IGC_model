@@ -26,7 +26,7 @@ default_simplify_tolerance = 1000 #in meters, tolerance for simplifying the rout
 
 #define case study
 case_study = "igc_nrw"
-# case_study = "h2bb"
+case_study = "h2bb"
 
 START = time.perf_counter() 
 

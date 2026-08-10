@@ -12,34 +12,53 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 from matplotlib import cm
 import math
-import matplotlib.pyplot as plt, pandas as pd, seaborn as sns
+import seaborn as sns
+
+### This part is to guarantee execution in normal and in debug mode to cleanly call scripts from neighbouring directories
+def _find_project_root(start_dir, required_siblings=("econ_module", "relationship_module", "general_module")):
+    candidate = os.path.abspath(start_dir)
+    for _ in range(6):
+        if all(os.path.isdir(os.path.join(candidate, s)) for s in required_siblings):
+            return candidate
+        parent = os.path.dirname(candidate)
+        if parent == candidate:
+            break
+        candidate = parent
+    raise RuntimeError(f"Could not locate IGC_model project root (expected {required_siblings}) starting from {start_dir}")
+
+try:
+    _start_dir = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    _start_dir = os.getcwd()
+
+project_root = _find_project_root(_start_dir)
+this_dir = os.path.join(project_root, "econ_module")
+
+for sibling in ("relationship_module", "general_module"):
+    sibling_dir = os.path.join(project_root, sibling)
+    if sibling_dir not in sys.path:
+        sys.path.insert(0, sibling_dir)
+
+from relationship_module import build_relationship_base, calculate_relationship_factor
 from model_io import load_model_run, save_model_run, save_complete_model, load_complete_model
+from model_settings import get_settings
+#%%
 
 START = time.perf_counter()
-
-print('Execute in Directory:')
+print("Execute in Directory:")
 print(os.getcwd() + "\n")
 
-# Add the parent directory to the Python path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+script_dir = this_dir
+data_path = os.path.join(script_dir, "data")
+output_path = os.path.join(script_dir, "output")
 
-# Get the directory where this script is located
-script_dir = os.path.dirname(os.path.abspath(__file__))
-
-# Define the paths
-try:
-    data_path = os.path.join(script_dir, "data")
-    output_path = os.path.join(script_dir, "output")
-except:
-    data_path = os.path.join(script_dir, "data")
-    output_path = os.path.join(script_dir, "output")
-
-from model_settings import get_settings
 ### Define central parameter values ###
 case_study = get_settings(parameter="case_study")
 transport_costs_param = get_settings(parameter="transport_costs")
 base_step_param = get_settings(parameter="base_step")
 reference_region = "EU-DEU"
+
+#%%
 
 # Load the data
 prices_df = pd.read_excel(os.path.join(data_path, case_study, "region_tables.xlsx"), sheet_name='prices')
@@ -130,13 +149,38 @@ data_1D_df = data_1D_df.drop('supply_step_order', axis=1)
 # Reset the index if needed
 data_1D_df = data_1D_df.reset_index(drop=True)
 
-# Read relationship factors
-relationship_df = pd.read_excel(os.path.join(data_path, case_study, "relationship_transport_data.xlsx"), sheet_name='relationship')
-transport_costs = pd.read_excel(os.path.join(data_path, case_study, "relationship_transport_data.xlsx"), sheet_name='transport_costs')
-transport_costs_long = transport_costs.melt(id_vars=['region1', "region2", 'commodity', 'scenario'],
-                    var_name='supply_step')
+def load_relationship_factors(data_path, case_study, target_max_multiplier=1.5):
+    try:
+        from relationship_module import build_relationship_base, calculate_relationship_factor
+        base = build_relationship_base(case_study=case_study)
+        relationship_df = calculate_relationship_factor(base, target_max_multiplier=target_max_multiplier)
+        used_static_fallback = False
 
-data_2D_df = pd.merge(relationship_df, transport_costs_long, on=['region1', 'region2', 'scenario'])
+    except (ImportError, ModuleNotFoundError, FileNotFoundError) as e:
+        import warnings
+        warnings.warn(f"relationship_module unreachable ({type(e).__name__}: {e}) -- using static fallback.")
+        relationship_df = pd.read_excel(
+            os.path.join(data_path, case_study, "relationship_transport_data.xlsx"),
+            sheet_name="relationship",
+        )
+        used_static_fallback = True
+
+    return relationship_df, used_static_fallback
+
+# Read relationship factors
+base = build_relationship_base()
+relationship_df, used_static_fallback = load_relationship_factors(data_path, case_study, target_max_multiplier=1.5)
+if used_static_fallback == True: print("Used static fallback for relationships. Check if dynamic calculation is required")
+
+transport_costs = pd.read_excel(os.path.join(data_path, case_study, "relationship_transport_data.xlsx"), sheet_name='transport_costs')
+# transport_costs_long = transport_costs.melt(id_vars=['region1', "region2", 'commodity', 'scenario'],
+#                     var_name='supply_step')
+transport_efficiencies = pd.read_excel(os.path.join(data_path, case_study, "relationship_transport_data.xlsx"), sheet_name='transport_efficiencies')
+
+data_2D_df = pd.merge(transport_costs, relationship_df, on=['region1', 'region2', 'scenario'], how="left")
+data_2D_df = pd.merge(data_2D_df, transport_efficiencies,  on=['region1', 'region2', "commodity", 'scenario'], how="left")
+
+#%%
 
 # data_2D_df_reci = data_2D_df.copy()
 # data_2D_df_reci = data_2D_df_reci.rename(columns={"region1":"region2", "region2":"region1"})
@@ -252,7 +296,7 @@ all_pairs = pd.MultiIndex.from_product([regions, regions], names=["region1", "re
 all_pairs = pd.DataFrame(index=all_pairs).reset_index()
 all_pairs = all_pairs[all_pairs.region1 != all_pairs.region2]
 
-extra_dims = pd.MultiIndex.from_product([commodities, scenarios, supply_steps], names=["commodity","scenario","supply_step"])
+extra_dims = pd.MultiIndex.from_product([commodities, scenarios], names=["commodity","scenario"]) # supply_steps "supply_step"
 extra_dims = pd.DataFrame(index=extra_dims).reset_index()
 
 ### Cartesian Expansion ###
@@ -260,18 +304,17 @@ all_pairs["key"] = 1
 extra_dims["key"] = 1
 full_pairs = all_pairs.merge(extra_dims, on="key").drop("key", axis=1)
 
+#%%
+
 ### Merge Transport Data ###
 pair_df_tmp = data_2D_df_combined.copy()
-data_full = full_pairs.merge(pair_df_tmp, on=["region1", "region2", "commodity", "scenario", "supply_step"], how="left")
-
-### Fill Missing Values ###
-data_full["value"] = data_full["value"].fillna(transport_costs_param)
-np.random.seed(42)
-data_full["value"] += np.random.uniform(0, .001, len(data_full))
+data_full = full_pairs.merge(pair_df_tmp, on=["region1", "region2", "commodity", "scenario"], how="left") # "supply_step"
 
 ### Convert to xarray ###
-data_2D = data_full.set_index(["region1", "region2", "commodity", "scenario", "supply_step"]).to_xarray()
+data_2D = data_full.set_index(["region1", "region2", "commodity", "scenario"]).to_xarray() #"supply_step"
 data_2D = data_2D.reindex(region1=regions, region2=regions)
+
+#%%
 
 ### Expand Nodal Data ###
 data_1D_expanded = data_1D.expand_dims(region1=regions, region2=regions)
@@ -280,13 +323,15 @@ data_1D = data_1D.fillna(0)
 # Reindex data_2D to match the supply_step coordinates of data_1D_expanded
 data_2D = data_2D.reindex(supply_step=data_1D_expanded.supply_step.values)
 
+#%%
+
 # Now merge the datasets
 data_new = xr.merge([data_1D_expanded, data_2D], join="exact")
 data = data_new.fillna(0)
 
 ### Remove NaNs ###
 data_1D = data_1D.fillna(0)
-data_2D = data_2D.fillna({"value": 0, "counter": 0, "rel_relation": 0, "vom_multiplier": 0})
+data_2D = data_2D.fillna({"transport_cost": 0, "counter": 0, "shared_weight":0, "alliance_index":0, "gamma":0, "vom_multiplier": 0, "transport_efficiency":0})
 
 for v in data_2D.data_vars:
     n_missing = np.isnan(data_2D[v]).sum()
@@ -313,7 +358,38 @@ segment_price = data_1D["price"]
 transport_coords = {"region1":regions, "region2":regions, "commodity":commodities, "scenario":scenarios, "supply_step":supply_steps}
 demand_xr = (data_1D.sel(supply_step=base_step_param, drop=True))
 
-def build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, max_total_dependence_rel = 1, max_indiv_dependence_rel = 1):
+#%%
+
+def build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, max_total_dependence_rel = 1, max_indiv_dependence_rel = 1, rfm = 1):
+    print(f"Determine relationship factor for rfm {rfm}")
+    rel_df, used_static_fallback = load_relationship_factors(data_path, case_study, target_max_multiplier=rfm)
+    rel_df = rel_df[["region1", "region2", "scenario", "vom_multiplier"]]
+
+    if not (rel_df["region1"] < rel_df["region2"]).all():
+        raise ValueError("rel_df is not in canonical (region1 < region2) order -- mirroring below would be wrong.")
+
+    mirrored = rel_df.rename(columns={"region1": "region2", "region2": "region1"})
+    regions = data_2D.region1.values
+    diagonal = pd.DataFrame({
+        "region1": regions, "region2": regions,
+        "scenario": rel_df["scenario"].iloc[0], "vom_multiplier": 1.0,
+    })
+    full_rel_df = pd.concat([rel_df, mirrored, diagonal], ignore_index=True)
+
+    vom_da = (
+        full_rel_df.set_index(["region1", "region2", "scenario"])["vom_multiplier"]
+        .to_xarray()
+        .reindex(region1=data_2D.region1, region2=data_2D.region2, scenario=data_2D.scenario)
+    )
+
+    missing = int(vom_da.isnull().sum())
+    if missing:
+        raise ValueError(f"{missing} region pair(s) missing from rel_df after reindexing -- check region code mismatches.")
+
+    data_2D["vom_multiplier"] = vom_da.broadcast_like(data_2D["vom_multiplier"])
+
+    print(f"rfm={rfm}: vom_multiplier mean={data_2D['vom_multiplier'].mean().item():.3f}, max={data_2D['vom_multiplier'].max().item():.3f}")
+
     # -----------------------------
     # Build the optimization model
     # -----------------------------
@@ -333,11 +409,24 @@ def build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, max_tota
     )
 
     v_transport = model.add_variables(
-        lower=0,
-        coords=data_2D.coords,
-        dims=data_2D.dims, # region1, region2, commodity, scenario
-        name="v_transport"
+    lower=0,
+    coords=[
+        data_2D.coords["region1"],
+        data_2D.coords["region2"],
+        data_2D.coords["commodity"],
+        data_2D.coords["scenario"],
+        data_1D.coords["supply_step"],
+    ],
+    dims=["region1", "region2", "commodity", "scenario", "supply_step"],
+    name="v_transport"
     )
+
+    # v_transport = model.add_variables(
+    #     lower=0,
+    #     coords=data_2D.coords,
+    #     dims=data_2D.dims, # region1, region2, commodity, scenario
+    #     name="v_transport"
+    # )
 
     v_unmet = model.add_variables(
         lower=0,
@@ -347,9 +436,12 @@ def build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, max_tota
     )
 
     ### Flow Accounting ###
-    transport_efficiency = 0.95
+    transport_efficiency = data_2D["transport_efficiency"]  # dims: region1, region2, commodity, scenario
 
-    # imports into region i:
+    # apply route-specific efficiency to each flow *before* aggregating
+    v_transport_delivered = v_transport * transport_efficiency  # dims: region1, region2, commodity, scenario, supply_step
+
+    # imports into region i (raw, pre-loss):
     inflow = (v_transport.sum("region1").rename(region2="region"))
     # exports from region i:
     outflow = (v_transport.sum("region2").rename(region1="region"))
@@ -362,8 +454,21 @@ def build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, max_tota
 
     ### Regional Accounting ###
     regional_production = (v_supply_segment.sum(dim="supply_step"))
-    regional_import_total = ((inflow * transport_efficiency).sum(dim="supply_step"))
-    regional_import_indiv = (v_transport.sum("supply_step").rename(region2="region"))
+
+    # delivered imports, accounting for route-specific transport losses
+    regional_import_total = (
+        v_transport_delivered
+        .sum("region1")
+        .rename(region2="region")
+        .sum(dim="supply_step")
+    )   
+    # regional_import_total = ((inflow * transport_efficiency).sum(dim="supply_step"))
+    regional_import_indiv = (
+    v_transport_delivered
+    .sum(dim="supply_step")
+    .rename(region2="region")
+    )
+    # regional_import_indiv = (v_transport.sum("supply_step").rename(region2="region"))
 
     # -----------------------------
     # Implement derivative conversion efficiencies
@@ -401,17 +506,18 @@ def build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, max_tota
     c_balance = model.add_constraints(
         (v_supply_segment
         - outflow
-        + inflow * transport_efficiency).sum(dim="supply_step")
+        + v_transport_delivered.sum("region1").rename(region2="region")).sum(dim="supply_step")
         + v_unmet
         == demand_xr["demand"],
         name="c_balance")
-
+    
     ### Objective ###
     production_costs = (v_supply_segment * segment_price
                         ).sum() #dim= explizit definieren manchmal praktisch für Lösung
 
-    transport_costs = (v_transport * data_2D["value"] * data_2D["vom_multiplier"]
-                    ).sum()
+    effective_multiplier = 1 + rfm * (data_2D["vom_multiplier"] - 1)
+    print(effective_multiplier)
+    transport_costs = (v_transport * data_2D["transport_cost"] * effective_multiplier).sum()
 
     penalty_costs = (v_unmet * 100000).sum()
 
@@ -429,30 +535,40 @@ def build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, max_tota
         print(solution["v_supply_segment"])
         print(solution["v_transport"])
         #define model run name
-        name = f"model_run_{n}n_{case_study}_{max_total_dependence_rel*100:.0f}_{max_indiv_dependence_rel*100:.0f}"
+        name = f"model_run_{n}n_{case_study}_{max_total_dependence_rel*100:.0f}_{max_indiv_dependence_rel*100:.0f}_rfm{rfm*100:.0f}"
         #save solution to file
         save_model_run(output_path, data_1D, data_2D, solution, name,
                     meta={"solver": "gurobi",
                             "case_study": case_study,
                             "max_total_dependence_rel": max_total_dependence_rel,
-                            "max_indiv_dependence_rel": max_indiv_dependence_rel
+                            "max_indiv_dependence_rel": max_indiv_dependence_rel,
+                            "relationship_factor_magnitude": rfm,
+                            "n":n
                             })
         save_complete_model(model, output_path, name)
     else:
         print("No solution available")
     return model, solution
 
-model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price)
+# model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, 0.75, 0.2, 1)
 
-total_dep_list = [0, 0.2, 0.4, 0.6, 0.8, 1]
-indiv_dep_list = [0, 0.2, 0.4, 0.6, 0.8, 1]
+# total_dep_list = [0, 0.2, 0.4, 0.6, 0.8, 1]
+# indiv_dep_list = [0, 0.2, 0.4, 0.6, 0.8, 1]
+
+# # Execute sensitivity analysis for dependency parameters
+# for t_d in total_dep_list:
+#     for i_d in indiv_dep_list:
+#         print("Execute optimization for dependency parameters: " + str(t_d) + "_" + str(i_d))
+#         model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, t_d, i_d)
+#         print("Optimization successfull")
+
+relationship_factor_magnitude = [1, 1.2, 1.5, 1.8, 2.0]
 
 # Execute sensitivity analysis for dependency parameters
-for t_d in total_dep_list:
-    for i_d in indiv_dep_list:
-        print("Execute optimization for dependency parameters: " + str(t_d) + "_" + str(i_d))
-        model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, t_d, i_d)
-        print("Optimization successfull")
+for rfm in relationship_factor_magnitude:
+    print("Execute optimization for relationship magnitude: " + str(rfm))
+    model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, 0.75, 0.2, rfm)
+    print("Optimization successfull")
 
 # ==========================
 # Extract shadow prices
@@ -469,3 +585,4 @@ print(marginals)
 #%%
 STOP = time.perf_counter()
 print('Total execution time of script',round((STOP-START), 1), 's')
+#%%

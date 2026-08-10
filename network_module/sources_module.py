@@ -13,6 +13,7 @@ from setup import get_system_path, get_ram_usage
 
 #delete after development
 case_study = "igc_nrw"
+case_study = "h2bb"
 data_path = r".\data_module\Data"
 output_path = r"output"
 epsg="3035"
@@ -76,14 +77,15 @@ def assign_sources_to_scenarios_and_sectors(sources_data_op_gdf):
     )
     return sources_data_op_out_gdf
 
-def visualize_sources(sources_data):
+def visualize_sources(sources_data, case_study="igc_nrw"):
     #plot the source locations with diamter corresponding to the "EMISSIONS_2023" or "tco2_2023" column and color group by "Final Main Activity Type Name"
     size_col = "tco2_2023"
     color_col = "nace_21"
     sources_data.plot(column=color_col, markersize=sources_data[size_col]/10000, legend=True, figsize=(10,10))
-    #increase plot size and reduce legend size
+    plt.savefig(os.path.join("network_module", "figures", f"{case_study}_source_plot.png"), dpi=300)
     plt.ioff()
     plt.draw()
+    
     return
 
 def read_all_existing_pipelines(data_path=os.path.join("data_module", "Data"), case_study="igc_nrw"):
@@ -110,7 +112,7 @@ def get_sources(data_path=os.path.join("data_module", "Data"), case_study="igc_n
 
 test_sources_o = get_sources()
 print(str(test_sources_o) + "\n")
-visualize_sources(test_sources_o)
+visualize_sources(test_sources_o, case_study)
 
 STOP = time.perf_counter()
 print('Total execution time of script',round((STOP-START), 1), 's')

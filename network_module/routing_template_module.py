@@ -13,7 +13,7 @@ from setup import get_system_path
 
 #delete after development
 case_study = "igc_nrw"
-# case_study = "h2bb"
+case_study = "h2bb"
 data_path = r".\data_module\Data"
 output_path = r"output"
 epsg="3035"
@@ -66,11 +66,11 @@ def combine_and_process_routes(potential_retrofit_routes_gdf, potential_routes_g
     routing_template_gdf["geometry"] = routing_template_gdf["geometry"].simplify(tolerance=default_simplify_tolerance)
     return routing_template_gdf
 
-def visualize_routing_template(routing_template_gdf): #, version):
+def visualize_routing_template(routing_template_gdf, case_study, version):
     routing_template_gdf['index'] = routing_template_gdf.index
     routing_template_gdf.plot(column='index', cmap="viridis")
     plt.draw()
-    plt.savefig(f"routing_template.png", dpi=300) #_{version}
+    plt.savefig(os.path.join("network_module", "figures", f"{case_study}_{version}_routing_template_plot.png"), dpi=300)
     return
 
 def get_routing_template(data_path=r".\data_module\Data", case_study="igc_nrw"):
@@ -81,9 +81,9 @@ def get_routing_template(data_path=r".\data_module\Data", case_study="igc_nrw"):
     return routing_template_gdf, potential_retrofit_routes_gdf, potential_routes_gdf
 
 routing_template_gdf, retrofit_routes_gdf, potential_routes_gdf = get_routing_template(data_path, case_study)
-# visualize_routing_template(routing_template_gdf, 1)
-# visualize_routing_template(retrofit_routes_gdf, 2)
-# visualize_routing_template(potential_routes_gdf, 3)
+visualize_routing_template(routing_template_gdf, case_study, 1)
+visualize_routing_template(retrofit_routes_gdf, case_study, 2)
+visualize_routing_template(potential_routes_gdf, case_study, 3)
 
 STOP = time.perf_counter()
 print('Total execution time of script',round((STOP-START), 1), 's')
