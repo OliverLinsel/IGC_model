@@ -10,6 +10,8 @@ from matplotlib.lines import Line2D
 from matplotlib import cm
 from matplotlib.colors import Normalize
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import plotly.express as px
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -73,6 +75,58 @@ plt.rcParams["axes.labelsize"] = 14
 plt.rcParams["xtick.labelsize"] = 12
 plt.rcParams["ytick.labelsize"] = 12
 plt.rcParams["legend.fontsize"] = 12
+
+# Define the Wistia color palette
+# Define a custom Wistia color palette with 30 shades
+wistia_colors = [
+    '#FFFFFF', '#FFFDF9', '#FFF9F2', '#FFF6EB', '#FFF2E4', '#FFEFDD', '#FFECD6',
+    '#FFE9CF', '#FFE6C8', '#FFE3C1', '#FFE0BA', '#FFDDB3', '#FFDAAD', '#FFD7A6',
+    '#FFD4A0', '#FFD199', '#FFCE92', '#FFCB8B', '#FFC884', '#FFC57E', '#FFC277',
+    '#FFBF70', '#FFBC69', '#FFB962', '#FFB65B', '#FFB354', '#FFB04D', '#FFAE46',
+    '#FFAB3F', '#FFA838', '#FFA531', '#FFA22A', '#FFA023', '#FFA01C', '#FFA015',
+    '#FFA00E', '#FFA007', '#FFA000', '#FFA300', '#FFA600'
+]
+
+# Set global parameters for Plotly
+template = {
+    "layout": {
+        "font": {
+            "family": "Times New Roman",
+            "color": "black"
+        },
+        "plot_bgcolor": "white",
+        "paper_bgcolor": "white",
+        "xaxis": {
+            "tickfont": {
+                "color": "black",
+                "size": 12
+            },
+            "title": {
+                "standoff": 15,
+                "font": {
+                    "size": 14
+                }
+            }
+        },
+        "yaxis": {
+            "tickfont": {
+                "color": "black",
+                "size": 12
+            },
+            "title": {
+                "standoff": 15,
+                "font": {
+                    "size": 14
+                }
+            }
+        },
+        "legend": {
+            "font": {
+                "size": 12
+            }
+        }
+    }
+}
 
 MWH_TO_TWH = 1e6  # model results are in MWh; divide by 1e6 for TWh
 
@@ -555,7 +609,7 @@ def plot_sankey_flows(ds, hhi_results):
         width=2000,
         height=1000)
     os.makedirs("output", exist_ok=True)
-    fig.write_image(os.path.join(output_path, "figures", f"sankey_diagram_constrained_{n}n_{max_total_dependence_rel*100:.0f}_{max_indiv_dependence_rel*100:.0f}_rfm{rfm*100:.0f}_wide.png"), scale=1)
+    fig.write_image(os.path.join(output_path, "figures", f"sankey_diagram_constrained_{n}n_{max_total_dependence_rel*100:.0f}_{max_indiv_dependence_rel*100:.0f}_rfm{rfm*100:.0f}_wide.png"), scale=4)
 
     # fig.show()
     plt.ioff()
@@ -779,8 +833,6 @@ def analyse_results(output_path, runs):
 
     return hhi_df, cost_df
 
-from matplotlib.lines import Line2D
-
 def plot_hhi_sens(hhi_df, low_thresh=None, high_thresh=None):
     """
     Plot a 3D surface showing HHI as a function of max_total_dependence
@@ -914,25 +966,6 @@ def plot_cost_sens(cost_df):
     fig.savefig(os.path.join(output_path, "figures", f"cost_surface_{n}n_{commodity}.png"))
     return fig, ax
 
-import plotly.graph_objects as go
-
-def _curly_brace_path(x, y0, y1, width, q=0.6):
-    """
-    Build an SVG path string for a vertical curly brace between y0 and y1,
-    anchored at horizontal position x, bulging outward by `width`
-    (negative width points left/outward from the axis).
-    Two cubic beziers meeting at the tip (x - width, midpoint) - the
-    standard way to draw a curly brace shape.
-    """
-    ym = (y0 + y1) / 2
-    return (
-        f"M {x},{y0} "
-        f"C {x+width*q},{y0} {x+width},{y0+(ym-y0)*(1-q)} {x+width},{ym} "
-        f"C {x+width},{y1-(y1-ym)*(1-q)} {x+width*q},{y1} {x},{y1}"
-    )
-
-import plotly.graph_objects as go
-
 def _curly_brace_path(x, y0, y1, width, q=0.6):
     """
     Build an SVG path string for a vertical curly brace between y0 and y1,
@@ -944,7 +977,6 @@ def _curly_brace_path(x, y0, y1, width, q=0.6):
         f"C {x+width*q},{y0} {x+width},{y0+(ym-y0)*(1-q)} {x+width},{ym} "
         f"C {x+width},{y1-(y1-ym)*(1-q)} {x+width*q},{y1} {x},{y1}"
     )
-
 
 def plot_trade_off_curve(hhi_df, cost_df, hhi_threshold=1500):
     """
@@ -1113,10 +1145,6 @@ def load_transport_paths(output_path, transport_flows_df, commodity="h2", scenar
         paths_df["path_geometry"] = paths_df["path_geometry"].apply(
             lambda x: wkt.loads(x) if isinstance(x, str) else None
         )
-        # NOTE: raw coordinates from the Dijkstra step are already WGS84 lon/lat degrees
-        # (see create_network_graph -> key(pt)), so label them as such directly —
-        # do NOT assign a projected CRS here and reproject, that's what was corrupting
-        # the coordinates into near-zero values.
         paths_gdf = gpd.GeoDataFrame(paths_df, geometry="path_geometry", crs=default_epsg_1)
         paths_gdf = paths_gdf.to_crs(default_epsg_2)
         paths_gdf["length"] = paths_gdf.length
@@ -1456,197 +1484,276 @@ def marginals_to_df(marginals, commodity="h2", scenario="Base"):
     mc_df = mc_df[["region", "marginal_cost"]]
     return mc_df
 
-def plot_country_sensitivity(country_supply_df, country_metrics_df, countries_of_interest,
-                              vom_by_partner_country, top_n_partners=5):
-    fig, axes = plt.subplots(
-        2, len(countries_of_interest), figsize=(5 * len(countries_of_interest), 7),
-        sharex=True, gridspec_kw={"height_ratios": [3, 1.3]},
-    )
-    if len(countries_of_interest) == 1:
-        axes = axes.reshape(2, 1)
+def load_market_results_in_df(runs, rfm_sweep):
+    ### first we now load the respective global data from the model runs loaded in the sweep ###
+    # Initialize an empty list to store the data
+    data_list = []
 
-    cmap = plt.get_cmap("RdYlGn_r")  # green = cheap/allied -> red = expensive/war
-    norm = mcolors.Normalize(vmin=1, vmax=10)
-
-    for col, country in enumerate(countries_of_interest):
-        ax_top, ax_bottom = axes[0, col], axes[1, col]
-
-        sub = country_supply_df[country_supply_df["country"] == country].copy()
-        partner_totals = sub[~sub["source"].isin(["domestic", "unmet"])].groupby("source")["volume"].sum()
-        top_partners = partner_totals.sort_values(ascending=False).head(top_n_partners).index.tolist()
-        sub["source_grouped"] = sub["source"].where(
-            sub["source"].isin(["domestic", "unmet"]) | sub["source"].isin(top_partners), "other"
-        )
-        pivot = (
-            sub.groupby(["rfm", "source_grouped"])["volume"].sum()
-            .reset_index().pivot(index="rfm", columns="source_grouped", values="volume")
-            .fillna(0)
-        )
-
-        cols_order = ["domestic"] + sorted(
-            [c for c in pivot.columns if c not in ("domestic", "other", "unmet")],
-            key=lambda p: vom_by_partner_country.get((country, p), 1),
-        )
-        if "other" in pivot.columns:
-            cols_order.append("other")
-        if "unmet" in pivot.columns:
-            cols_order.append("unmet")
-        pivot = pivot[cols_order]
-
-        bottom = np.zeros(len(pivot))
-        x = pivot.index.astype(str)
-        for source in pivot.columns:
-            if source == "domestic":
-                color = "#3b4a6b"
-            elif source == "other":
-                color = "#c9c9c9"
-            elif source == "unmet":
-                color = "black"
-            else:
-                color = cmap(norm(vom_by_partner_country.get((country, source), 1)))
-            bars = ax_top.bar(x, pivot[source], bottom=bottom, color=color, label=source, width=0.6)
-            bottom += pivot[source].values
-
-            # Add region name as label for each import segment
-            if source not in ["domestic", "other", "unmet"]:
-                for bar in bars:
-                    height = bar.get_height()
-                    if height > 0:
-                        ax_top.text(bar.get_x() + bar.get_width() / 2., height + 0.005 * max(pivot[source]),
-                                    source, ha='center', va='bottom', rotation=0, fontsize=6)
-
-        demand_line = country_metrics_df[country_metrics_df["country"] == country].set_index("rfm")["demand"]
-        ax_top.step(x, demand_line.reindex(pivot.index).values, where="mid",
-                    linestyle="--", color="black", label="Demand")
-        ax_top.set_title(country)
-        if col == 0:
-            ax_top.set_ylabel("Volume [MWh]")
-
-        metrics = country_metrics_df[country_metrics_df["country"] == country].set_index("rfm")
-        ax_bottom.plot(x, metrics["marginal_cost"].reindex(pivot.index).values, color="black", marker="o")
-        ax_bottom_twin = ax_bottom.twinx()
-        ax_bottom_twin.plot(x, metrics["weighted_vom_multiplier"].reindex(pivot.index).values,
-                             color="crimson", marker="s")
-        ax_bottom.set_xlabel("rfm")
-        if col == 0:
-            ax_bottom.set_ylabel("Marginal cost [€/MWh]", color="black")
-        if col == len(countries_of_interest) - 1:
-            ax_bottom_twin.set_ylabel("Weighted vom_multiplier", color="crimson")
-
-    fig.suptitle("Country supply composition & cost sensitivity to relationship factor (rfm)")
-    fig.tight_layout()
-    fig.savefig(os.path.join(output_path, "figures", f"country_relationship_sensitivity_{max_total_dependence_rel*100:.0f}_{max_indiv_dependence_rel*100:.0f}_rfm{rfm*100:.0f}.png"), dpi=300, bbox_inches='tight')
-    return fig
-
-
-def build_country_dataframes(runs, countries_of_interest, output_path, run_name,
-                              max_total_dependence_rel, max_indiv_dependence_rel,
-                              commodity="h2", scenario="Base"):
-    """
-    `runs` must store data_1D alongside data_2D/solution per rfm (demand lives
-    in data_1D, not data_2D) -- add it to your sweep loop if it isn't there yet:
-        runs[sweep_rfm] = {"data_1D": sweep_data_1D, "data_2D": sweep_data_2D,
-                            "solution": sweep_solution, "meta": sweep_meta}
- 
-    FLAG: demand flexibility isn't implemented yet -- all real `demand` values
-    live in the `ds_p_0` segment, other supply_step segments are unused/zero.
-    Selecting `ds_p_0` directly (rather than summing across supply_step) avoids
-    silently depending on those unused segments actually being zero.
-    """
-    supply_rows, metric_rows, vom_by_partner_country = [], [], {}
- 
-    for sweep_rfm, run in runs.items():
-        data_1D, data_2D, solution = run["data_1D"], run["data_2D"], run["solution"]
-        vom = data_2D["vom_multiplier"]
- 
-        name = run_name(max_total_dependence_rel, max_indiv_dependence_rel, sweep_rfm)
-        sweep_model = load_complete_model(output_path, name)
-        marginals = sweep_model.constraints["c_balance"].dual.copy()
-        marginal_costs_df = marginals_to_df(marginals, commodity=commodity, scenario=scenario)
- 
+    # Loop through each rfm in the rfm_sweep
+    for rfm in rfm_sweep:
+        # Loop through each country in the countries_of_interest
         for country in countries_of_interest:
-            domestic = float(
-                solution["v_supply_segment"]
-                .sel(region=country, commodity=commodity, scenario=scenario)
-                .sum(dim="supply_step")
-            )
-            supply_rows.append({"rfm": sweep_rfm, "country": country, "source": "domestic", "volume": domestic})
- 
-            imports = (
-                solution["v_transport"]
-                .sel(region2=country, commodity=commodity, scenario=scenario)
-                .sum(dim="supply_step")
-            )
-            for partner in imports.region1.values:
-                vol = float(imports.sel(region1=partner))
-                if vol > 1e-9:
-                    supply_rows.append({"rfm": sweep_rfm, "country": country, "source": partner, "volume": vol})
-                vom_by_partner_country[(country, partner)] = float(
-                    vom.sel(region1=partner, region2=country, commodity=commodity, scenario=scenario)
-                )
- 
-            unmet = float(solution["v_unmet"].sel(region=country, commodity=commodity, scenario=scenario))
-            if unmet > 1e-9:
-                supply_rows.append({"rfm": sweep_rfm, "country": country, "source": "unmet", "volume": unmet})
- 
-            demand = float(
-                data_1D["demand"].sel(region=country, commodity=commodity, scenario=scenario, supply_step="ds_p_0")
-            )
- 
-            mc_row = marginal_costs_df[marginal_costs_df["region"] == country]
-            marginal_cost = float(mc_row["marginal_cost"].iloc[0]) if not mc_row.empty else np.nan
- 
-            import_total = float(imports.sum())
-            weighted_vom = float((imports * vom.sel(region2=country)).sum() / import_total) if import_total > 0 else np.nan
- 
-            metric_rows.append({
-                "rfm": sweep_rfm, "country": country,
-                "demand": demand, "marginal_cost": marginal_cost, "weighted_vom_multiplier": weighted_vom,
-            })
- 
-    return pd.DataFrame(supply_rows), pd.DataFrame(metric_rows), vom_by_partner_country
+            # Extract the domestic production volume (v_supply_segment)
+            domestic_prod = runs[rfm]["solution"]["v_supply_segment"].sel(region=country, commodity="h2", scenario="Base").sum(dim="supply_step").values
 
-from model_settings import get_settings
+            # Extract the demand (demand)
+            demand = runs[rfm]["data_1D"]["demand"].sel(region=country, commodity="h2", scenario="Base", supply_step="ds_p_0").values
+
+            # Extract the import volumes (v_transport) and source countries
+            imports_data = runs[rfm]["solution"]["v_transport"].sel(region2=country, commodity="h2", scenario="Base")
+            imports = imports_data.sum(dim="supply_step").values
+            source_countries = imports_data["region1"].values
+
+            # Loop through each source country and its corresponding import volume
+            for source_country, import_volume in zip(source_countries, imports):
+                if import_volume != 0:  # Only include non-zero imports
+                    # Create a dictionary with the extracted data
+                    data_dict = {
+                        "RFM": rfm,
+                        "Region": country,
+                        "Source Country": source_country,
+                        "Domestic Production": domestic_prod,
+                        "Demand": demand,
+                        "Imports": import_volume
+                    }
+
+                    # Append the dictionary to the list
+                    data_list.append(data_dict)
+
+    # Convert the list to a pandas DataFrame
+    rfm_sweep_results_df = pd.DataFrame(data_list)
+    
+    # Display the DataFrame
+    print(rfm_sweep_results_df)
+    return rfm_sweep_results_df
+
+def plot_rfm_sens_selec_country(rfm_sweep_results_df):
+    # Create a subplot for each country with uniform spacing
+    fig = make_subplots(
+        rows=1,
+        cols=len(countries_of_interest),
+        subplot_titles=countries_of_interest,
+        horizontal_spacing=0.05,  # Uniform spacing between columns
+        vertical_spacing=0.05
+    )
+
+    # Create a dictionary to map source countries to colors
+    source_country_colors = {}
+    for i, source_country in enumerate(rfm_sweep_results_df["Source Country"].unique()):
+        source_country_colors[source_country] = wistia_colors[i % len(wistia_colors)]
+
+    # Create a custom legend
+    legend_items = [
+        {"name": "Domestic Production", "color": "turquoise"},
+        {"name": "Demand", "color": "red"}
+    ]
+
+    # Add source countries to the legend
+    for source_country in rfm_sweep_results_df["Source Country"].unique():
+        legend_items.append({"name": source_country, "color": source_country_colors[source_country]})
+
+    # Store demand values for each country
+    demand_values = {}
+
+    # Loop through each country in the countries_of_interest
+    for i, country in enumerate(countries_of_interest):
+        # Filter the DataFrame for the current country
+        country_data = rfm_sweep_results_df[rfm_sweep_results_df["Region"] == country]
+
+        # Check if there's any data for this country
+        if country_data.empty:
+            print(f"No data available for country: {country}")
+            continue
+
+        # Extract the demand for the country
+        if "Demand" in country_data.columns and not country_data["Demand"].empty:
+            demand = country_data["Demand"].iloc[0]
+            demand_values[country] = demand
+        else:
+            demand = 0
+            demand_values[country] = 0
+
+        # Loop through each rfm in the rfm_sweep
+        for rfm in rfm_sweep:
+            # Filter the DataFrame for the current rfm
+            rfm_data = country_data[country_data["RFM"] == rfm]
+
+            # Check if there's any data for this RFM value
+            if rfm_data.empty:
+                continue
+
+            # Extract the domestic production and import volumes
+            domestic_prod = rfm_data["Domestic Production"].iloc[0] if not rfm_data["Domestic Production"].empty else 0
+            imports = rfm_data.groupby("Source Country")["Imports"].sum()
+
+            # Create a stacked bar trace for domestic production in turquoise
+            fig.add_trace(
+                go.Bar(
+                    x=[rfm],
+                    y=[domestic_prod],
+                    name=f"Domestic Production",
+                    marker_color="turquoise",
+                    text=[f"Domestic"],
+                    textposition="auto",
+                    hoverinfo="text",
+                    showlegend=False  # Disable automatic legend
+                ),
+                row=1,
+                col=i+1,
+            )
+
+            # Check if there are any imports
+            if not imports.empty:
+                # Create a stacked bar trace for each source country's imports
+                for source_country, import_volume in imports.items():
+                    fig.add_trace(
+                        go.Bar(
+                            x=[rfm],
+                            y=[import_volume],
+                            name=source_country,  # Shortened label to only show source country name
+                            marker_color=source_country_colors.get(source_country, wistia_colors[0]),
+                            text=[f"{source_country}"],
+                            textposition="auto",
+                            hoverinfo="text",
+                            showlegend=False  # Disable automatic legend
+                        ),
+                        row=1,
+                        col=i+1,
+                    )
+
+        # Add a horizontal line for the domestic demand across all subplots
+        # Using a scatter plot for the demand line
+        fig.add_trace(
+            go.Scatter(
+                x=rfm_sweep,
+                y=[demand] * len(rfm_sweep),  # Convert from MWh to GWh
+                mode='lines',
+                line=dict(color='red', width=3),
+                name='Demand',
+                showlegend=False,
+                # legendgroup="group1"
+            ),
+            row=1,
+            col=i+1,
+        )
+
+    # Add custom legend
+    for item in legend_items:
+        fig.add_trace(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode="markers",
+                marker=dict(size=8, color=item["color"]),
+                showlegend=True,
+                name=item["name"],
+                legendgroup="group1"
+            )
+        )
+
+    # Update the layout with specific parameters and global template
+    fig.update_layout(
+        title_text="Domestic Production and Import Volumes by Relationship Factor Magnitude (rfm)",
+        xaxis_title="Relationship Factor Magnitude (rfm)",
+        yaxis_title="Volume [MWh]",
+        barmode="stack",
+        height=900,
+        width=1200,
+        font=dict(family="Times New Roman", color="black"),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        xaxis=dict(
+            tickfont=dict(color="black", size=12),
+            title=dict(standoff=15, font=dict(size=14))
+        ),
+        yaxis=dict(
+            tickfont=dict(color="black", size=12),
+            title=dict(standoff=15, font=dict(size=14))
+        ),
+        legend=dict(
+            orientation="v",
+            yanchor="middle",
+            y=0.5,
+            xanchor="right",
+            x=1.2,
+            itemsizing="constant",
+            font=dict(size=12),
+            title=dict(font=dict(size=12))  # Optional: Adjust title font size if needed
+        )
+    )
+
+    # Set x-axis title for all subplots
+    for i in range(1, len(countries_of_interest) + 1):
+        fig.update_xaxes(
+            title_text="Relationship Factor Magnitude (rfm)",
+            row=1,
+            col=i
+        )
+
+    # Ensure all rfm values are visible on the x-axis
+    for i in range(1, len(countries_of_interest) + 1):
+        fig.update_xaxes(
+            tickvals=rfm_sweep,
+            row=1,
+            col=i
+        )
+
+    # Save the plot as an image and HTML file
+    os.makedirs(os.path.join(output_path, "figures"), exist_ok=True)
+
+    # Save as PNG
+    fig.write_image(os.path.join(output_path, "figures", f"relationship_sensitivity_analysis_{max_total_dependence_rel*100:.0f}_{max_indiv_dependence_rel*100:.0f}_rfm{rfm*100:.0f}.png"), scale=4)
+
+    # Save as HTML
+    fig.write_html(os.path.join(output_path, "figures", f"relationship_sensitivity_analysis_{max_total_dependence_rel*100:.0f}_{max_indiv_dependence_rel*100:.0f}_rfm{rfm*100:.0f}.html"), include_plotlyjs='cdn')
+
+    # Show the plot
+    return fig.show()
+
+data_path = os.path.join(this_dir, "data")
+output_path = os.path.join(this_dir, "output")
+print("Work in working directory: " + str(this_dir))
+
+### Define static parameters ###
+# default epsg for geoplots
+default_epsg_1 = "EPSG:4326"
+# default epsg for projections for determining lengths
+default_epsg_2 = "EPSG:6933"
+reference_region = "EU-DEU"
+commodity = "h2"
+scenario = "Base"
+
 ### Define central parameter values ###
 case_study = get_settings(parameter="case_study")
-# case_study = "h2bb"
-transport_costs_param = get_settings(parameter="transport_cost")
+print("Visualise case study: " + str(case_study))
 base_step_param = get_settings(parameter="base_step")
+print("Visualise with base step: " + str(base_step_param))
 
-# Get the directory where this script is located
-script_dir = os.getcwd()
-script_dir = os.path.dirname(os.path.abspath(__file__))
-data_path = os.path.join(script_dir, "data")
-output_path = os.path.join(script_dir, "output")
-
-def run_name(mtd=0.75, mid=0.2, rfm=1.5):
+### Define a small function to directly call a certain run from the model saves ###
+def run_name(n=159, mtd=0.75, mid=0.2, rfm=1.5):
     return f"model_run_{n}n_{case_study}_{mtd*100:.0f}_{mid*100:.0f}_rfm{rfm*100:.0f}"
 
-n = 159
-### Define the individual run to analyse if you dont make any sweeps ###
-model_run = run_name(0.75, 0.2, 1)
-
-default_epsg_1 = "EPSG:4326"
-default_epsg_2 = "EPSG:6933"
-
-hhi_results = {}
+### Define the individual base run to analyse if you dont make any sweeps ###
+model_run = run_name(mtd=0.75, mid=0.2, rfm=1)
+print("Load base model as " + str(model_run))
 
 # import model run
 data_1D, data_2D, solution, meta_data = load_model_run(os.path.join(output_path), model_run)
 # import model
 model = load_complete_model(os.path.join(output_path), model_run)
+print("Loaded model input data for base model run " + str(model))
 
+### Now load model run dependend data ###
 regions = solution.region.values
-reference_region = "EU-DEU"
 commodities = solution.commodity.values
-commodity = "h2"
-scenario = "Base"
 max_total_dependence_rel = meta_data["max_total_dependence_rel"]
 max_indiv_dependence_rel = meta_data["max_indiv_dependence_rel"]
 rfm = meta_data["relationship_factor_magnitude"]
+n = meta_data["n"]
 
-### Employ relationship_factor_magnitude sensitivity ###
+### define the sewwping lists for e.g. relationship factor, dependecy constraints and the visualisation country selection ###
 rfm_sweep = [1, 1.2, 1.5, 1.8, 2]
+countries_of_interest = ["EU-DEU", "EU-ITA", "AS-TUR"]
 
 runs = {}
 for rfm in rfm_sweep:
@@ -1660,90 +1767,58 @@ for rfm in rfm_sweep:
 
     runs[rfm] = {"data_1D":data_1D, "data_2D": data_2D, "solution": solution, "meta": meta}
 
-### first we now load the respective global data from the model runs loaded in the sweep ###
-
-global_rows, tier_rows = [], []
-
-for rfm, run in runs.items():
-    flow = run["solution"]["v_transport"]
-    vom = run["data_2D"]["vom_multiplier"]
-    alliance_index = run["data_2D"]["alliance_index"]
-
-    global_rows.append({"rfm": rfm, "total_transport_volume": float(flow.sum())})
-
-    tier = xr.where(vom == 10, "war", xr.where(alliance_index > 0, "allied", "unaffiliated"))
-    for t in ["allied", "unaffiliated", "war"]:
-        tier_rows.append({"rfm": rfm, "tier": t, "volume": float(flow.where(tier == t).sum())})
-
-global_summary = pd.DataFrame(global_rows)
-tier_share = pd.DataFrame(tier_rows).pivot(index="rfm", columns="tier", values="volume")
-tier_share = tier_share.div(tier_share.sum(axis=1), axis=0)
-
-### Now we enable only examining individual countries ###
-
-countries_of_interest = ["EU-DEU", "AS-IND", "EU-UKR", "NA-USA"]
-
-country_rows = []
-for rfm, run in runs.items():
-    flow, vom = run["solution"]["v_transport"], run["data_2D"]["vom_multiplier"]
-    for country in countries_of_interest:
-        imports = flow.sel(region2=country)
-        volume = float(imports.sum())
-        weighted_vom = float((imports * vom.sel(region2=country)).sum() / imports.sum()) if volume > 0 else np.nan
-        n_partners = int((imports.sum(dim=[d for d in imports.dims if d != "region1"]) > 0).sum())
-        country_rows.append({"rfm": rfm, "country": country, "import_volume": volume,
-                              "weighted_vom_multiplier": weighted_vom, "n_import_partners": n_partners})
-
-country_df = pd.DataFrame(country_rows)
+# write the results into a dataframe that can be used in subsequent plotting
+rfm_sweep_results_df = load_market_results_in_df(runs, rfm_sweep)
+#%%
 
 ### First of all general pre solution visualisation - only to be conducted once ###
-# print("Plotting supply curves")
-# plot_supply_curves(data_1D)
-# plot_supply_curves2(data_1D)
+print("Plotting supply curves")
+plot_supply_curves(data_1D)
+plot_supply_curves2(data_1D)
 
 ### Secondly, all global visualisations for every run ###
-# print("Calculating HHI")
-# hhi = calculate_hhi(solution)
-# print("Plotting Sankey flow diagram for trade relations")
-# # plot_sankey_flows(solution, hhi)
-# print("Plotting supply and demand donut charts")
-# plot_supply_demand_donuts(solution)
+hhi_results = {}
+print("Calculating HHI")
+hhi = calculate_hhi(solution)
+print("Plotting Sankey flow diagram for trade relations")
+# plot_sankey_flows(solution, hhi)
+print("Plotting supply and demand donut charts")
+plot_supply_demand_donuts(solution)
+plot_sankey_flows(solution, hhi_results)
 
 ### plot trade flows
-# print("Getting marginals")
-# marginals = model.constraints["c_balance"].dual.copy()
-# marginal_costs_df = marginals_to_df(marginals)
-# marginal_costs_df = marginals_to_df(marginals, commodity="h2", scenario="Base")
-# print(marginal_costs_df)
-# print("Getting transport flow values")
-# transport_flows_df = get_transport_flows(solution)
-# print("Load transport paths")
-# paths_gdf = load_transport_paths(output_path, transport_flows_df)
-# print("Plotting transport flow map")
-# plot_transport_flows_map(paths_gdf, output_path, marginal_costs_df, max_total_dependence_rel, max_indiv_dependence_rel, rfm)
+print("Getting marginals")
+marginals = model.constraints["c_balance"].dual.copy()
+marginal_costs_df = marginals_to_df(marginals)
+marginal_costs_df = marginals_to_df(marginals, commodity="h2", scenario="Base")
+print(marginal_costs_df)
+print("Getting transport flow values")
+transport_flows_df = get_transport_flows(solution)
+print("Load transport paths")
+paths_gdf = load_transport_paths(output_path, transport_flows_df)
+print("Plotting transport flow map")
+plot_transport_flows_map(paths_gdf, output_path, marginal_costs_df, max_total_dependence_rel, max_indiv_dependence_rel, rfm)
 
-### Thridly, all combined global visualisations ###
+
+### Thirdly, all combined global visualisations ###
 
 ## analyse the HHI dependence sensitivity across all model runs ###
-# runs = load_all_model_runs(output_path)
-# rfm_runs = [run for run in runs if "rfm100" in run["run_name"]]
-# hhi_df, cost_df = analyse_results(output_path, rfm_runs)
-# regions = solution.region.values.tolist()
-# n = len(regions)
-# plot_hhi_sens(hhi_df)
-# plot_cost_sens(cost_df)
-# plot_trade_off_curve(hhi_df, cost_df)
+runs = load_all_model_runs(output_path)
+rfm_runs = [run for run in runs if "rfm100" in run["run_name"]]
+hhi_df, cost_df = analyse_results(output_path, rfm_runs)
+regions = solution.region.values.tolist()
+n = len(regions)
+plot_hhi_sens(hhi_df)
+plot_cost_sens(cost_df)
+plot_trade_off_curve(hhi_df, cost_df)
 
 ### Fourthly, all selected country visualisations for every run ###
 print("Plotting supply composition")
 plot_supply_composition(model, solution)
 
 ### Fifthly, all selected country visualisations for the combined runs ###
-country_supply_df, country_metrics_df, vom_by_partner_country = build_country_dataframes(
-    runs, countries_of_interest, output_path, run_name, max_total_dependence_rel, max_indiv_dependence_rel
-)
-plot_country_sensitivity(country_supply_df, country_metrics_df, countries_of_interest, vom_by_partner_country)
-
+print("Plotting sensitivity analysis for relationship factor magnitude")
+plot_rfm_sens_selec_country(rfm_sweep_results_df)
 
 #%%
 #empty memory
