@@ -552,23 +552,24 @@ def build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, max_tota
 
 # model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, 0.75, 0.2, 1)
 
-# total_dep_list = [0, 0.2, 0.4, 0.6, 0.8, 1]
-# indiv_dep_list = [0, 0.2, 0.4, 0.6, 0.8, 1]
-
-# # Execute sensitivity analysis for dependency parameters
-# for t_d in total_dep_list:
-#     for i_d in indiv_dep_list:
-#         print("Execute optimization for dependency parameters: " + str(t_d) + "_" + str(i_d))
-#         model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, t_d, i_d)
-#         print("Optimization successfull")
-
-relationship_factor_magnitude = [1, 1.2, 1.5, 1.8, 2.0]
+rfm_filler = 2
+total_dep_list = [0, 0.2, 0.4, 0.6, 0.8, 1]
+indiv_dep_list = [0, 0.2, 0.4, 0.6, 0.8, 1]
 
 # Execute sensitivity analysis for dependency parameters
-for rfm in relationship_factor_magnitude:
-    print("Execute optimization for relationship magnitude: " + str(rfm))
-    model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, 0.75, 0.2, rfm)
-    print("Optimization successfull")
+for t_d in total_dep_list:
+    for i_d in indiv_dep_list:
+        print("Execute optimization for dependency parameters: " + str(t_d) + "_" + str(i_d))
+        model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, t_d, i_d, rfm_filler)
+        print("Optimization successfull")
+
+# relationship_factor_magnitude = [1, 1.2, 1.5, 1.8, 2.0]
+
+# # Execute sensitivity analysis for dependency parameters
+# for rfm in relationship_factor_magnitude:
+#     print("Execute optimization for relationship magnitude: " + str(rfm))
+#     model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, 0.8, 0.2, rfm)
+#     print("Optimization successfull")
 
 # ==========================
 # Extract shadow prices

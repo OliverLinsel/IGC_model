@@ -22,6 +22,7 @@ import json
 from shapely import wkt
 import plotly.colors as pc
 import xarray as xr
+import gc
 
 ### This part is to guarantee execution in normal and in debug mode to cleanly call scripts from neighbouring directories
 def _find_project_root(start_dir, required_siblings=("econ_module", "relationship_module", "general_module")):
@@ -75,8 +76,8 @@ plt.rcParams["axes.labelsize"] = 14
 plt.rcParams["xtick.labelsize"] = 12
 plt.rcParams["ytick.labelsize"] = 12
 plt.rcParams["legend.fontsize"] = 12
+default_dpi = 300
 
-# Define the Wistia color palette
 # Define a custom Wistia color palette with 30 shades
 wistia_colors = [
     '#FFFFFF', '#FFFDF9', '#FFF9F2', '#FFF6EB', '#FFF2E4', '#FFEFDD', '#FFECD6',
@@ -86,6 +87,14 @@ wistia_colors = [
     '#FFAB3F', '#FFA838', '#FFA531', '#FFA22A', '#FFA023', '#FFA01C', '#FFA015',
     '#FFA00E', '#FFA007', '#FFA000', '#FFA300', '#FFA600'
 ]
+
+wistia_colors = ['#FFFF00', '#FFFB00', '#FFF700', '#FFF300', '#FFEF00', '#FFEB00', '#FFE700', '#FFE300',
+ '#FFDF00', '#FFDB00', '#FFD700', '#FFD300', '#FFCF00', '#FFCB00', '#FFC700', '#FFC300',
+ '#FFBF00', '#FFBB00', '#FFB700', '#FFB300', '#FFAF00', '#FFAB00', '#FFA700', '#FFA300',
+ '#FF9F00', '#FF9B00', '#FF9700', '#FF9300', '#FF8F00', '#FF8B00', '#FF8700', '#FF8300',
+ '#FF7F00', '#FF7B00', '#FF7700', '#FF7300', '#FF6F00', '#FF6B00', '#FF6700', '#FF6300',
+ '#FF5F00', '#FF5B00', '#FF5700', '#FF5300', '#FF4F00', '#FF4B00', '#FF4700', '#FF4300',
+ '#FF3F00', '#FF3B00']
 
 # Set global parameters for Plotly
 template = {
@@ -130,90 +139,7 @@ template = {
 
 MWH_TO_TWH = 1e6  # model results are in MWh; divide by 1e6 for TWh
 
-def plot_supply_curves2(data_1D, commodity='h2', scenario='Base', reference_region=None, MWH_TO_TWH=0.001):
-    # Set font to Times New Roman
-    plt.rcParams['font.family'] = 'Times New Roman'
-    plt.rcParams['text.color'] = 'black'
-
-    # Convert data to DataFrame
-    data_1D_df = (
-        data_1D
-        .sel(commodity=commodity, scenario=scenario)
-        .to_dataframe()
-        .reset_index()
-    )
-
-    regions = data_1D_df["region"].unique()
-    non_ref_regions = [r for r in regions if r != reference_region]
-
-    # Create a figure
-    fig, ax = plt.subplots(figsize=(14, 8))
-
-    # Create a colormap
-    cmap = cm.viridis
-    norm = Normalize(vmin=0, vmax=len(non_ref_regions))
-    color_map = {r: cmap(norm(i)) for i, r in enumerate(non_ref_regions)}
-
-    first_step_twh_by_region = []
-    total_twh_by_region = {}
-
-    for region in regions:
-        region_data_sorted = data_1D_df[data_1D_df["region"] == region].sort_values(by="demand")
-        supply_diff_twh = region_data_sorted["supply_diff"] / MWH_TO_TWH
-        cumulative_supply_twh = supply_diff_twh.cumsum()
-
-        nonzero_steps = supply_diff_twh[supply_diff_twh > 0]
-        if not nonzero_steps.empty:
-            first_step_twh_by_region.append(nonzero_steps.min())
-        total_twh_by_region[region] = cumulative_supply_twh.iloc[-1]
-
-        if region == reference_region:
-            color = "red"
-            line_width = 3
-        else:
-            color = color_map[region]
-            line_width = 2
-
-        # Plot the supply curve
-        ax.plot(cumulative_supply_twh, region_data_sorted["price"],
-                color=color, linewidth=line_width, label=region)
-
-        # Add inline label
-        last_x = region_data_sorted["supply"].iloc[-1] / MWH_TO_TWH
-        last_y = region_data_sorted["price"].iloc[-1]
-        ax.text(last_x, last_y, region, fontsize=10, color=color,
-                ha='left', va='bottom', fontfamily='Times New Roman')
-
-    # Set the title and labels
-    ax.set_title(f"Regional supply curves — {commodity}, {scenario}",
-                 fontsize=14, fontweight='bold')
-    ax.set_xlabel("Supply potential (TWh/a)", fontsize=12, fontweight='bold')
-    ax.set_ylabel("Price (€/MWh)", fontsize=12, fontweight='bold')
-
-    # Set the x-axis to log scale
-    x_lower = np.percentile(first_step_twh_by_region, 1)
-    x_upper = max(total_twh_by_region.values()) * 1.1
-    ax.set_xscale('log')
-    ax.set_xlim(x_lower, x_upper)
-
-    # Add grid lines
-    ax.grid(True, which="both", linestyle='--', linewidth=0.5, color='lightgrey')
-
-    # Add legend
-    # ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', title='Supply curves',
-    #           fontsize=10, frameon=True, framealpha=1)
-
-    # Adjust layout
-    plt.tight_layout()
-    fig.subplots_adjust(right=0.75)
-    #export to png
-    fig.savefig(os.path.join(output_path, "figures", f"supply_curves_{commodity}_{scenario}_2.png"), dpi=300, bbox_inches='tight')
-    plt.ioff()
-    # Show the plot
-    # plt.show()
-    return
-
-def plot_supply_curves(data_1D):
+def plot_supply_curves(data_1D, reference_region = "EU-DEU"):
     data_1D_df = (
         data_1D
         .sel(commodity=commodity, scenario=scenario)
@@ -251,6 +177,7 @@ def plot_supply_curves(data_1D):
             go.Scatter(
                 x=cumulative_supply_twh, y=region_data_sorted["price"], mode="lines", name=region,
                 line=dict(color=color, width=line_width),
+                showlegend=False,
                 hovertemplate=(
                     f"<b>{region}</b><br>Cumulative supply: %{{x:.2f}} TWh/a<br>"
                     "Price: %{y:.2f} €/MWh<extra></extra>"
@@ -258,34 +185,37 @@ def plot_supply_curves(data_1D):
             )
         )
 
-        # ---- inline label for every region, matching the original -----------
-        last_x = region_data_sorted["supply"].iloc[-1]/MWH_TO_TWH
+        last_x = cumulative_supply_twh.iloc[-1]
         last_y = region_data_sorted["price"].iloc[-1]
-        fig.add_annotation(
-            x=last_x, y=last_y, text=region, showarrow=False,
-            font=dict(family="Times New Roman", size=10, color=color),
-            xanchor="left", yanchor="bottom",
+        fig.add_trace(
+            go.Scatter(
+                x=[last_x], y=[last_y],
+                mode="text",
+                text=[region],
+                textposition="middle right",
+                textfont=dict(family="Times New Roman", size=13, color=color),  # bumped from 10
+                showlegend=False,
+                hoverinfo="skip",
+            )
         )
 
     fig.update_layout(
         title=dict(
             text=f"Regional supply curves — {commodity}, {scenario}",
-            font=dict(family="Times New Roman", color="black"),
+            font=dict(family="Times New Roman", size=20, color="black"),  # bumped, was unset (default ~17)
         ),
-        xaxis=dict(title=dict(text="Supply potential (TWh/a)", font=dict(family="Times New Roman", color="black")),
-                    tickfont=dict(family="Times New Roman", color="black")),
-        yaxis=dict(title=dict(text="Price (€/MWh)", font=dict(family="Times New Roman", color="black")),
-                    tickfont=dict(family="Times New Roman", color="black")),
-        legend=dict(title=dict(text="Supply curves", font=dict(family="Times New Roman", color="black")),
-                    font=dict(family="Times New Roman", color="black", size=10),
-                    x=1.02, y=1, xanchor="left", yanchor="top"),
+        xaxis=dict(title=dict(text="Supply potential (TWh/a)", font=dict(family="Times New Roman", size=16, color="black")),
+                    tickfont=dict(family="Times New Roman", size=16, color="black")),
+        yaxis=dict(title=dict(text="Price (€/MWh)", font=dict(family="Times New Roman", size=16, color="black")),
+                    tickfont=dict(family="Times New Roman", size=16, color="black")),
+        showlegend=False,
         font=dict(family="Times New Roman", color="black"),
         plot_bgcolor="white", paper_bgcolor="white",
-        width=1400, height=800, margin=dict(r=200),
+        width=1400, height=800, margin=dict(r=20),  # was r=200
     )
 
     x_lower = np.percentile(first_step_twh_by_region, 1)
-    x_upper = max(total_twh_by_region.values()) * 1.1
+    x_upper = max(total_twh_by_region.values()) * 1.7
     fig.update_xaxes(
         type="log",
         range=[np.log10(x_lower), np.log10(x_upper)],
@@ -330,7 +260,7 @@ def calculate_hhi(ds):
             print("Market is considered to be highly concentrated.")
     return hhi
 
-def plot_supply_composition(model, ds):
+def plot_supply_composition(model, ds, mtd, mid, rfm, reference_region):
     # ----- price + demand -----
     market_price = abs(
         model.constraints["c_balance"]
@@ -456,7 +386,7 @@ def plot_supply_composition(model, ds):
 
     ax.set_xlabel("Quantity [TWh]", fontfamily="Times New Roman")
     ax.set_ylabel("Delivered cost €/MWh", fontfamily="Times New Roman")
-    ax.set_title(f"Supply composition: {reference_region} - Max import share: {max_total_dependence_rel*100:.0f}% total, {max_indiv_dependence_rel*100:.0f}% per region)", fontfamily="Times New Roman", fontsize=15)
+    ax.set_title(f"Supply composition: {reference_region} - Max import share: {mtd*100:.0f}% total, {mid*100:.0f}% per region)", fontfamily="Times New Roman", fontsize=15)
     ax.set_xlim(0, stack.end.max() * 1.05)
 
     # tick labels don't reliably inherit rcParams["font.family"] -- set explicitly
@@ -473,12 +403,12 @@ def plot_supply_composition(model, ds):
 
     plt.tight_layout()
     os.makedirs("output", exist_ok=True)
-    plt.savefig(os.path.join(output_path, "figures", f"supply_composition_{reference_region}_{max_total_dependence_rel*100:.0f}_{max_indiv_dependence_rel*100:.0f}.png"), bbox_inches="tight", dpi=300)
+    plt.savefig(os.path.join(output_path, "figures", "supply_composition", f"supply_composition_{reference_region}_{mtd*100:.0f}_{mid*100:.0f}_rfm{rfm*100:.0f}.png"), bbox_inches="tight", dpi=default_dpi)
     plt.ioff()
     # plt.show()
     return
 
-def plot_sankey_flows(ds, hhi_results):
+def plot_sankey_flows(ds, hhi_results, mtd, mid, rfm):
     # ---- config -------------------------------------------------------------
     min_flow = 0.0
 
@@ -589,8 +519,8 @@ def plot_sankey_flows(ds, hhi_results):
         title=(
             f"{commodity.upper()} trade flows [TWh] — {scenario} — "
             f"{hhi:.0f} HHI — "
-            f"Max import share: {max_total_dependence_rel*100:.0f}% total, "
-            f"{max_indiv_dependence_rel*100:.0f}% per region"
+            f"Max import share: {mtd*100:.0f}% total, "
+            f"{mid*100:.0f}% per region"
         ),
         font_size=15,
         font_family="Times New Roman",
@@ -601,21 +531,174 @@ def plot_sankey_flows(ds, hhi_results):
     )
 
     os.makedirs("output", exist_ok=True)
-    # fig.write_html(os.path.join("output", f"sankey_diagram_constrained_{max_total_dependence_rel*100:.0f}_{max_indiv_dependence_rel*100:.0f}.html"))
-    fig.write_image(os.path.join(output_path, "figures", f"sankey_diagram_constrained_{n}n_{max_total_dependence_rel*100:.0f}_{max_indiv_dependence_rel*100:.0f}_rfm{rfm*100:.0f}.png"), scale=4)
+    # fig.write_html(os.path.join("output", f"sankey_diagram_constrained_{mtd*100:.0f}_{mid*100:.0f}.html"))
+    fig.write_image(os.path.join(output_path, "figures", "sankey_flows", f"sankey_diagram_constrained_v_{n}n_{mtd*100:.0f}_{mid*100:.0f}_rfm{rfm*100:.0f}.png"), scale=4)
     # fig.show()
 
     fig.update_layout(
         width=2000,
         height=1000)
     os.makedirs("output", exist_ok=True)
-    fig.write_image(os.path.join(output_path, "figures", f"sankey_diagram_constrained_{n}n_{max_total_dependence_rel*100:.0f}_{max_indiv_dependence_rel*100:.0f}_rfm{rfm*100:.0f}_wide.png"), scale=4)
+    fig.write_image(os.path.join(output_path, "figures", "sankey_flows", f"sankey_diagram_constrained_h_{n}n_{mtd*100:.0f}_{mid*100:.0f}_rfm{rfm*100:.0f}.png"), scale=4)
 
     # fig.show()
     plt.ioff()
     return
 
-def plot_supply_demand_donuts(ds):
+def plot_sankey_flows_selected(ds, hhi_results, mtd, mid, rfm, countries_of_interest):
+    # ---- config -------------------------------------------------------------
+    min_flow = 0.0
+
+    # ---- extract data over the FULL region set (unchanged) --------------------
+    regions = ds.region.values.tolist()
+    n = len(regions)
+
+    production = {
+        r: float(ds["v_supply_segment"].sel(region=r, commodity=commodity, scenario=scenario).sum("supply_step"))
+        for r in regions
+    }
+    unmet = {
+        r: float(ds["v_unmet"].sel(region=r, commodity=commodity, scenario=scenario))
+        for r in regions
+    }
+    demand_xr = (data_1D.sel(supply_step=base_step_param, drop=True))
+    demand = {
+        r: float(demand_xr["demand"].sel(region=r, commodity=commodity, scenario=scenario))
+        for r in regions
+    }
+
+    trade = {}
+    for src in regions:
+        for dst in regions:
+            if src == dst:
+                continue
+            val = float(
+                ds["v_transport"]
+                .sel(region1=src, region2=dst, commodity=commodity, scenario=scenario)
+                .sum("supply_step")
+            )
+            if val > min_flow:
+                trade[(src, dst)] = val
+
+    coi_set = set(countries_of_interest)
+
+    # ---- filter links to only those touching a country of interest -------
+    # domestic production->demand: only relevant if the country itself is selected
+    domestic_links = [r for r in regions if production[r] > min_flow and r in coi_set]
+
+    # cross-border trade: keep if EITHER side is a country of interest, so
+    # outside trade partners connected to a selected country are retained
+    trade_links = {(src, dst): val for (src, dst), val in trade.items()
+                   if src in coi_set or dst in coi_set}
+
+    # unmet demand: only relevant for selected countries
+    unmet_links = [r for r in regions if unmet[r] > min_flow and r in coi_set]
+
+    # ---- NEW: derive the node set from whichever regions actually appear ------
+    # in the filtered links above (this is what pulls in outside trade partners)
+    production_regions = set(domestic_links) | {src for (src, dst) in trade_links}
+    demand_regions = set(domestic_links) | {dst for (src, dst) in trade_links} | set(unmet_links)
+
+    used_regions = sorted(production_regions | demand_regions)
+    n_used = len(used_regions)
+    n = len(countries_of_interest)
+    has_unmet = len(unmet_links) > 0
+
+    # ---- node layout, reindexed to only the used regions -----------------------
+    production_idx = {r: i for i, r in enumerate(used_regions) if r in production_regions}
+    demand_idx = {r: i + n_used for i, r in enumerate(used_regions) if r in demand_regions}
+    # note: to keep index math simple, we allocate a demand slot at position
+    # (n_used + position in used_regions) for every used region, even if that
+    # region has no demand-side link — Sankey simply won't draw an isolated node's
+    # link, and the label is still meaningful to show
+    demand_idx = {r: i + n_used for i, r in enumerate(used_regions)}
+    production_idx = {r: i for i, r in enumerate(used_regions)}
+    unmet_node = 2 * n_used
+
+    labels = (
+        [f"{r} — production ({production[r] / 1e6:.0f} TWh)" for r in used_regions]
+        + [f"{r} — demand ({demand[r] / 1e6:.0f} TWh)" for r in used_regions]
+    )
+    if has_unmet:
+        labels.append("Unmet demand")
+
+    cmap = plt.get_cmap("plasma", n_used)
+    region_rgba = {r: cmap(i) for i, r in enumerate(used_regions)}
+
+    def to_plotly_rgba(rgba, alpha=None):
+        r, g, b, a = rgba
+        a = alpha if alpha is not None else a
+        return f"rgba({int(r*255)},{int(g*255)},{int(b*255)},{a:.2f})"
+
+    node_colors = (
+        [to_plotly_rgba(region_rgba[r], 0.9) for r in used_regions]
+        + [to_plotly_rgba(region_rgba[r], 0.9) for r in used_regions]
+    )
+    if has_unmet:
+        node_colors.append("rgba(150,150,150,0.9)")
+
+    # ---- links, using the filtered sets from above -----------------------------
+    source, target, value, link_color = [], [], [], []
+
+    for r in domestic_links:
+        source.append(production_idx[r])
+        target.append(demand_idx[r])
+        value.append(production[r])
+        link_color.append(to_plotly_rgba(region_rgba[r], 0.55))
+
+    for (src, dst), val in trade_links.items():
+        source.append(production_idx[src])
+        target.append(demand_idx[dst])
+        value.append(val)
+        link_color.append(to_plotly_rgba(region_rgba[src], 0.75))
+
+    if has_unmet:
+        for r in unmet_links:
+            source.append(unmet_node)
+            target.append(demand_idx[r])
+            value.append(unmet[r])
+            link_color.append("rgba(150,150,150,0.45)")
+
+    # ---- draw ---------------------------------------------------------------
+    fig = go.Figure(
+        go.Sankey(
+            arrangement="snap",
+            node=dict(
+                label=labels,
+                pad=15,
+                thickness=100,
+                color=node_colors,
+                line=dict(width=0),
+            ),
+            link=dict(source=source, target=target, value=value, color=link_color),
+        )
+    )
+    fig.update_layout(
+        title=(
+            f"{commodity.upper()} trade flows [TWh] — {scenario} — "
+            f"{hhi:.0f} HHI — "
+            f"Max import share: {mtd*100:.0f}% total, "
+            f"{mid*100:.0f}% per region — "
+            f"filtered to: {', '.join(countries_of_interest)}"
+        ),
+        font_size=15,
+        font_family="Times New Roman",
+        font_color="black",
+        width=1200,
+        height=1200 * np.sqrt(2),
+        margin=dict(l=10, r=10, t=40, b=10)
+    )
+
+    os.makedirs(os.path.join(output_path, "figures", "sankey_flows"), exist_ok=True)
+    fig.write_image(os.path.join(output_path, "figures", "sankey_flows", f"sankey_diagram_selected_v_{n}n_{mtd*100:.0f}_{mid*100:.0f}_rfm{rfm*100:.0f}.png"), scale=4)
+
+    fig.update_layout(width=2000, height=1000)
+    fig.write_image(os.path.join(output_path, "figures", "sankey_flows", f"sankey_diagram_selected_h_{n}n_{mtd*100:.0f}_{mid*100:.0f}_rfm{rfm*100:.0f}.png"), scale=4)
+
+    plt.ioff()
+    return
+
+def plot_supply_demand_donuts(ds, mtd, mid, rfm):
     def clean(val, tol=1e-3):
         """Snap near-zero (including small negative numerical noise) to exactly 0."""
         return 0.0 if abs(val) < tol else val
@@ -719,8 +802,8 @@ def plot_supply_demand_donuts(ds):
         (
             f"{commodity.upper()} trade flows [TWh] — {scenario} — "
             f"{hhi:.0f} HHI — "
-            f"Max import share: {max_total_dependence_rel*100:.0f}% total, "
-            f"{max_indiv_dependence_rel*100:.0f}% per region"
+            f"Max import share: {mtd*100:.0f}% total, "
+            f"{mid*100:.0f}% per region"
         ),
         fontsize=40,
         fontfamily="Times New Roman",
@@ -734,8 +817,7 @@ def plot_supply_demand_donuts(ds):
 
     # Save output with dependency variables in the filename
     os.makedirs("output", exist_ok=True)
-    fig.savefig(os.path.join(output_path, "figures", f"donut_charts_{n}n_{commodity}_{max_total_dependence_rel*100:.0f}_{max_indiv_dependence_rel*100:.0f}_rfm{rfm*100:.0f}.png"),
-        dpi=300, bbox_inches="tight")
+    fig.savefig(os.path.join(output_path, "figures", "supply_composition", f"donut_charts_{n}n_{mtd*100:.0f}_{mid*100:.0f}_rfm{rfm*100:.0f}.png"), dpi=100, bbox_inches="tight")
 
     # plt.show()
     plt.ioff()
@@ -802,8 +884,8 @@ def analyse_results(output_path, runs):
     # Iterate through each run in the runs list
     for run in runs:
         run_name = run["run_name"]
-        max_total = run["metadata"]["max_total_dependence_rel"]
-        max_indiv = run["metadata"]["max_indiv_dependence_rel"]
+        mtd = run["metadata"]["max_total_dependence_rel"]
+        mid = run["metadata"]["max_indiv_dependence_rel"]
 
         # Load the run solution
         data_1D, data_2D, solution, meta_data = load_model_run(output_path, run_name)
@@ -812,8 +894,8 @@ def analyse_results(output_path, runs):
         hhi = calculate_hhi(solution)
 
         hhi_data_list.append({
-            "max_total": max_total,
-            "max_indiv": max_indiv,
+            "mtd": mtd,
+            "mid": mid,
             "HHI": hhi
         })
 
@@ -822,8 +904,8 @@ def analyse_results(output_path, runs):
         total_system_costs = model.objective.value
 
         cost_data_list.append({
-            "max_total": max_total,
-            "max_indiv": max_indiv,
+            "mtd": mtd,
+            "mid": mid,
             "total_system_costs": total_system_costs
         })
 
@@ -833,137 +915,307 @@ def analyse_results(output_path, runs):
 
     return hhi_df, cost_df
 
-def plot_hhi_sens(hhi_df, low_thresh=None, high_thresh=None):
+# def plot_hhi_sens(hhi_df, low_thresh=None, high_thresh=None):
+#     """
+#     Plot a 3D surface showing HHI as a function of max_total_dependence
+#     and max_indiv_dependence, with demarcation lines for the standard
+#     HHI concentration corridors (unconcentrated / moderate / high).
+
+#     hhi_df must have columns "max_total", "max_indiv", "HHI".
+#     low_thresh, high_thresh: override the default corridor thresholds.
+#         If None, auto-detected as 1500/2500 (0-10000 scale) or
+#         0.15/0.25 (0-1 scale) based on the max HHI value present.
+#         The high threshold is only drawn if the surface actually
+#         exceeds it somewhere.
+#     """
+#     # Pivot into a grid: rows = max_total, cols = max_indiv
+#     pivot = hhi_df.pivot(
+#         index="mtd",
+#         columns="mid",
+#         values="HHI",
+#     ).sort_index().sort_index(axis=1)
+
+#     x = pivot.columns.values  # max_indiv
+#     y = pivot.index.values    # max_total
+#     X, Y = np.meshgrid(x, y)
+#     Z = pivot.values
+
+#     zmax = np.nanmax(Z)
+#     zmin = np.nanmin(Z)
+
+#     # --- auto-detect scale and set default thresholds ---
+#     if low_thresh is None or high_thresh is None:
+#         if zmax <= 1.5:  # looks like a 0-1 scale
+#             low_thresh, high_thresh = 0.15, 0.25
+#         else:  # standard 0-10000 scale
+#             low_thresh, high_thresh = 1500, 2500
+
+#     show_high = zmax > high_thresh  # only demarcate the high corridor if data crosses it
+
+#     fig = plt.figure(figsize=(10, 12))
+#     ax = fig.add_subplot(111, projection="3d")
+
+#     surf = ax.plot_surface(X, Y, Z, cmap="viridis", edgecolor="k",
+#                             linewidth=0.3, alpha=0.7)
+#     # ax.invert_xaxis()
+#     # ax.invert_yaxis()
+
+#     ax.zaxis.labelpad = 15
+#     fig.subplots_adjust(right=0.85)
+#     ax.set_xlabel("Max individual import dependence")
+#     ax.set_ylabel("Max total import dependence")
+#     ax.text2D(0.95, 0.82, "HHI", transform=ax.transAxes, ha="center", fontsize=12)
+#     ax.set_title("HHI Sensitivity to Dependence Constraints", fontsize=18)
+
+#     z_floor = zmin - 0.05 * (zmax - zmin)
+#     ax.set_zlim(z_floor, zmax)
+
+#     thresholds = [(low_thresh, "black", "Treshold HHI > 1500 for moderately concentrated market")]
+#     if show_high:
+#         thresholds.append((high_thresh, "black", "Treshold HHI > 2500 for highly concentrated market"))
+
+#     legend_lines = []
+#     xr = (x.min(), x.max())
+#     yr = (y.min(), y.max())
+
+#     for thresh, color, label in thresholds:
+#         # floor contour: traces where the surface crosses this HHI level
+#         ax.contour(X, Y, Z, levels=[thresh], zdir="z", offset=thresh,
+#                    colors=color, linewidths=2, linestyles="--")
+
+#         # wall lines: outline the threshold height on the xz/yz background panes
+#         for y_edge in yr:
+#             ax.plot(xr, [y_edge, y_edge], [thresh, thresh],
+#                     color=color, lw=2, ls=":", alpha=1, zorder=2)
+#         for x_edge in xr:
+#             ax.plot([x_edge, x_edge], yr, [thresh, thresh],
+#                     color=color, lw=2, ls=":", alpha=1, zorder=2)
+
+#         legend_lines.append(
+#             Line2D([0], [0], color=color, lw=2, ls="--",
+#                    label=f"{label} ({thresh})")
+#         )
+
+#     ax.legend(handles=legend_lines, loc="upper left", fontsize=9)
+
+#     plt.tight_layout()
+#     # plt.show()
+#     plt.ioff()
+#     fig.savefig(os.path.join(output_path, "figures", f"sens_area_{n}n_{commodity}_rfm{rfm*100:.0f}.png"))
+#     return fig, ax
+
+# def plot_cost_sens(cost_df):
+#     """
+#     Plot a 3D surface showing total_system_costs as a function of
+#     max_total_dependence and max_indiv_dependence.
+
+#     cost_df must have columns "max_total", "max_indiv", "total_system_costs".
+#     """
+#     currency_unit="€"
+#     raw_unit_scale=1e9
+
+#     pivot = cost_df.pivot(
+#         index="mtd",
+#         columns="mid",
+#         values="total_system_costs",
+#     ).sort_index().sort_index(axis=1)
+
+#     x = pivot.columns.values  # mid
+#     y = pivot.index.values    # mtd
+#     X, Y = np.meshgrid(x, y)
+#     Z = pivot.values / raw_unit_scale 
+
+#     fig = plt.figure(figsize=(10, 12))
+#     ax = fig.add_subplot(111, projection="3d")
+
+#     surf = ax.plot_surface(X, Y, Z, cmap="viridis", edgecolor="k",
+#                             linewidth=0.3, alpha=0.8)
+#     # ax.invert_xaxis()
+#     # ax.invert_yaxis()
+
+#     ax.zaxis.labelpad = 15
+#     fig.subplots_adjust(right=0.85)
+#     ax.set_xlabel("Max individual import dependence")
+#     ax.set_ylabel("Max total import dependence")
+#     ax.text2D(0.95, 0.82, f"Total system\ncosts [bn {currency_unit}]",
+#               transform=ax.transAxes, ha="center", fontsize=12)
+#     ax.set_title(f"Total System Cost Sensitivity to Dependence Constraints [bn {currency_unit}]",
+#                  fontsize=18)
+
+#     plt.tight_layout()
+#     # plt.show()
+#     plt.ioff()
+#     fig.savefig(os.path.join(output_path, "figures", f"cost_surface_{n}n_{commodity}.png"))
+#     return fig, ax
+
+# def get_widia_cmap(rfm_value, rfm_sweep):
+#     """Creates a Widia-based colormap that varies with rfm_value"""
+#     base_color = '#4B0082'  # Change to your actual Widia color
+#     rfm_min = min(rfm_sweep)
+#     rfm_max = max(rfm_sweep)
+#     norm_rfm = (rfm_value - rfm_min) / (rfm_max - rfm_min) if rfm_max > rfm_min else 0.5
+
+#     light_factor = 1.0 + 0.5 * (1 - norm_rfm)
+#     dark_factor = 0.7 + 0.3 * norm_rfm
+
+#     light_color = adjust_lightness(base_color, light_factor)
+#     dark_color = adjust_lightness(base_color, dark_factor)
+
+#     return LinearSegmentedColormap.from_list('widia_seq', [light_color, dark_color])
+
+def plot_hhi_sens_multi(hhi_dfs, rfm_values, low_thresh=None, high_thresh=None):
     """
-    Plot a 3D surface showing HHI as a function of max_total_dependence
-    and max_indiv_dependence, with demarcation lines for the standard
-    HHI concentration corridors (unconcentrated / moderate / high).
-
-    hhi_df must have columns "max_total", "max_indiv", "HHI".
-    low_thresh, high_thresh: override the default corridor thresholds.
-        If None, auto-detected as 1500/2500 (0-10000 scale) or
-        0.15/0.25 (0-1 scale) based on the max HHI value present.
-        The high threshold is only drawn if the surface actually
-        exceeds it somewhere.
+    Plot multiple 3D surfaces showing HHI as a function of max_total_dependence,
+    max_indiv_dependence, and relationship_factor_magnitude (rfm).
     """
-    # Pivot into a grid: rows = max_total, cols = max_indiv
-    pivot = hhi_df.pivot(
-        index="max_total",
-        columns="max_indiv",
-        values="HHI",
-    ).sort_index().sort_index(axis=1)
+    # Sort rfm values and select colors from wistia_colors
+    sorted_rfm = sorted(rfm_values)
+    n_rfm = len(sorted_rfm)
+    color_indices = [int(i * 29 / max(1, n_rfm-1)) for i in range(n_rfm)]  # Map to 0-29
+    surface_colors = [wistia_colors[i] for i in color_indices]
 
-    x = pivot.columns.values  # max_indiv
-    y = pivot.index.values    # max_total
-    X, Y = np.meshgrid(x, y)
-    Z = pivot.values
+    # Find global min/max for z-axis
+    all_z = []
+    for hhi_df in hhi_dfs:
+        pivot = hhi_df.pivot(index="mtd", columns="mid", values="HHI")
+        all_z.extend(pivot.values.flatten())
+    zmin, zmax = np.nanmin(all_z), np.nanmax(all_z)
 
-    zmax = np.nanmax(Z)
-    zmin = np.nanmin(Z)
-
-    # --- auto-detect scale and set default thresholds ---
+    # Auto-detect thresholds
     if low_thresh is None or high_thresh is None:
-        if zmax <= 1.5:  # looks like a 0-1 scale
+        if zmax <= 1.5:  # 0-1 scale
             low_thresh, high_thresh = 0.15, 0.25
-        else:  # standard 0-10000 scale
+        else:  # 0-10000 scale
             low_thresh, high_thresh = 1500, 2500
+    show_high = zmax > high_thresh
 
-    show_high = zmax > high_thresh  # only demarcate the high corridor if data crosses it
-
-    fig = plt.figure(figsize=(10, 12))
+    fig = plt.figure(figsize=(12, 14))
     ax = fig.add_subplot(111, projection="3d")
 
-    surf = ax.plot_surface(X, Y, Z, cmap="viridis", edgecolor="k",
-                            linewidth=0.3, alpha=0.7)
-    # ax.invert_xaxis()
-    # ax.invert_yaxis()
+    # Plot each surface with its wistia_colors color
+    legend_elements = []
+    for i, (hhi_df, color) in enumerate(zip(hhi_dfs, surface_colors)):
+        pivot = hhi_df.pivot(
+            index="mtd",
+            columns="mid",
+            values="HHI",
+        ).sort_index().sort_index(axis=1)
 
+        x = pivot.columns.values
+        y = pivot.index.values
+        X, Y = np.meshgrid(x, y)
+        Z = pivot.values
+
+        # Plot surface with solid color
+        surf = ax.plot_surface(X, Y, Z, color=color, edgecolor="k",
+                             linewidth=0.3, alpha=0.7, zorder=10-i)
+
+        # Add to legend
+        legend_elements.append(plt.Rectangle((0,0), 1, 1, fc=color,
+                                          label=f"rfm={sorted_rfm[i]:.2f}"))
+
+    # Set labels and title
     ax.zaxis.labelpad = 15
     fig.subplots_adjust(right=0.85)
     ax.set_xlabel("Max individual import dependence")
     ax.set_ylabel("Max total import dependence")
     ax.text2D(0.95, 0.82, "HHI", transform=ax.transAxes, ha="center", fontsize=12)
-    ax.set_title("HHI Sensitivity to Dependence Constraints", fontsize=18)
+    ax.set_title("HHI Sensitivity to Dependence Constraints (Multiple rfm Values)", fontsize=18)
 
+    # Set z-axis limits
     z_floor = zmin - 0.05 * (zmax - zmin)
     ax.set_zlim(z_floor, zmax)
 
-    thresholds = [(low_thresh, "black", "Treshold HHI > 1500 for moderately concentrated market")]
+    # Add threshold lines
+    thresholds = [(low_thresh, "black", "Threshold HHI > 1500 for moderately concentrated market")]
     if show_high:
-        thresholds.append((high_thresh, "black", "Treshold HHI > 2500 for highly concentrated market"))
+        thresholds.append((high_thresh, "black", "Threshold HHI > 2500 for highly concentrated market"))
 
-    legend_lines = []
     xr = (x.min(), x.max())
     yr = (y.min(), y.max())
 
     for thresh, color, label in thresholds:
-        # floor contour: traces where the surface crosses this HHI level
         ax.contour(X, Y, Z, levels=[thresh], zdir="z", offset=thresh,
-                   colors=color, linewidths=2, linestyles="--")
-
-        # wall lines: outline the threshold height on the xz/yz background panes
+                  colors=color, linewidths=2, linestyles="--")
         for y_edge in yr:
             ax.plot(xr, [y_edge, y_edge], [thresh, thresh],
-                    color=color, lw=2, ls=":", alpha=1, zorder=2)
+                   color=color, lw=2, ls=":", alpha=1, zorder=2)
         for x_edge in xr:
             ax.plot([x_edge, x_edge], yr, [thresh, thresh],
-                    color=color, lw=2, ls=":", alpha=1, zorder=2)
+                   color=color, lw=2, ls=":", alpha=1, zorder=2)
 
-        legend_lines.append(
-            Line2D([0], [0], color=color, lw=2, ls="--",
-                   label=f"{label} ({thresh})")
-        )
-
-    ax.legend(handles=legend_lines, loc="upper left", fontsize=9)
-
+    ax.legend(handles=legend_elements, loc="upper left", fontsize=9)
     plt.tight_layout()
-    # plt.show()
-    plt.ioff()
-    fig.savefig(os.path.join(output_path, "figures", f"sens_area_{n}n_{commodity}_rfm{rfm*100:.0f}.png"))
+
+    # Save with all rfm values in filename
+    rfm_str = "_".join([f"{r*100:.0f}" for r in sorted_rfm])
+    fig.savefig(os.path.join(output_path, "figures", f"hhi_multi_rfm_{rfm_str}.png"))
+    plt.close('all')
     return fig, ax
 
-def plot_cost_sens(cost_df):
+def plot_cost_sens_multi(cost_dfs, rfm_values, currency_unit="€", raw_unit_scale=1e9):
     """
-    Plot a 3D surface showing total_system_costs as a function of
-    max_total_dependence and max_indiv_dependence.
-
-    cost_df must have columns "max_total", "max_indiv", "total_system_costs".
+    Plot multiple 3D surfaces showing total_system_costs as a function of
+    max_total_dependence and max_indiv_dependence for multiple rfm values.
     """
-    currency_unit="€"
-    raw_unit_scale=1e9
+    # Sort rfm values and select colors from wistia_colors
+    sorted_rfm = sorted(rfm_values)
+    n_rfm = len(sorted_rfm)
+    color_indices = [int(i * 29 / max(1, n_rfm-1)) for i in range(n_rfm)]
+    surface_colors = [wistia_colors[i] for i in color_indices]
 
-    pivot = cost_df.pivot(
-        index="max_total",
-        columns="max_indiv",
-        values="total_system_costs",
-    ).sort_index().sort_index(axis=1)
+    # Find global min/max for z-axis
+    all_z = []
+    for cost_df in cost_dfs:
+        pivot = cost_df.pivot(index="mtd", columns="mid", values="total_system_costs")
+        all_z.extend((pivot.values/raw_unit_scale).flatten())
+    zmin, zmax = np.nanmin(all_z), np.nanmax(all_z)
 
-    x = pivot.columns.values  # max_indiv
-    y = pivot.index.values    # max_total
-    X, Y = np.meshgrid(x, y)
-    Z = pivot.values / raw_unit_scale 
-
-    fig = plt.figure(figsize=(10, 12))
+    fig = plt.figure(figsize=(12, 14))
     ax = fig.add_subplot(111, projection="3d")
 
-    surf = ax.plot_surface(X, Y, Z, cmap="viridis", edgecolor="k",
-                            linewidth=0.3, alpha=0.8)
-    # ax.invert_xaxis()
-    # ax.invert_yaxis()
+    # Plot each surface with its wistia_colors color
+    legend_elements = []
+    for i, (cost_df, color) in enumerate(zip(cost_dfs, surface_colors)):
+        pivot = cost_df.pivot(
+            index="mtd",
+            columns="mid",
+            values="total_system_costs",
+        ).sort_index().sort_index(axis=1)
 
+        x = pivot.columns.values
+        y = pivot.index.values
+        X, Y = np.meshgrid(x, y)
+        Z = pivot.values / raw_unit_scale
+
+        surf = ax.plot_surface(X, Y, Z, color=color, edgecolor="k",
+                             linewidth=0.3, alpha=0.7, zorder=10-i)
+
+        # Add to legend
+        legend_elements.append(plt.Rectangle((0,0), 1, 1, fc=color,
+                                          label=f"rfm={sorted_rfm[i]:.2f}"))
+
+    # Set labels and title
     ax.zaxis.labelpad = 15
     fig.subplots_adjust(right=0.85)
     ax.set_xlabel("Max individual import dependence")
     ax.set_ylabel("Max total import dependence")
     ax.text2D(0.95, 0.82, f"Total system\ncosts [bn {currency_unit}]",
               transform=ax.transAxes, ha="center", fontsize=12)
-    ax.set_title(f"Total System Cost Sensitivity to Dependence Constraints [bn {currency_unit}]",
+    ax.set_title(f"Total System Cost Sensitivity (Multiple rfm Values) [bn {currency_unit}]",
                  fontsize=18)
 
+    # Set z-axis limits
+    z_floor = zmin - 0.05 * (zmax - zmin)
+    ax.set_zlim(z_floor, zmax)
+
+    ax.legend(handles=legend_elements, loc="upper left", fontsize=9)
     plt.tight_layout()
-    # plt.show()
-    plt.ioff()
-    fig.savefig(os.path.join(output_path, "figures", f"cost_surface_{n}n_{commodity}.png"))
+
+    # Save with all rfm values in filename
+    rfm_str = "_".join([f"{r*100:.0f}" for r in sorted_rfm])
+    fig.savefig(os.path.join(output_path, "figures", f"cost_multi_rfm_{rfm_str}.png"))
+    plt.close('all')
     return fig, ax
 
 def _curly_brace_path(x, y0, y1, width, q=0.6):
@@ -978,163 +1230,343 @@ def _curly_brace_path(x, y0, y1, width, q=0.6):
         f"C {x+width},{y1-(y1-ym)*(1-q)} {x+width*q},{y1} {x},{y1}"
     )
 
-def plot_trade_off_curve(hhi_df, cost_df, hhi_threshold=1500):
+# def plot_trade_off_curve(hhi_df, cost_df, hhi_threshold=1500):
+#     """
+#     Merge hhi_df and cost_df, identify the trade of curve frontier (minimizing
+#     both HHI and total_system_costs), and plot it interactively with
+#     Plotly. Highlights the HHI concentration threshold as a low-risk
+#     "zone", marks the best option within the low-concentration zone in
+#     red with a label of its dependence settings, and annotates the cost
+#     premium of staying in that zone versus the global cost minimum via
+#     a curly brace on the right side of the plot.
+
+#     Returns fig.
+#     """
+#     df = hhi_df.merge(cost_df, on=["mtd", "mid"]).reset_index(drop=True)
+
+#     # --- identify trade-of-efficient front points ---
+#     costs = df[["total_system_costs", "HHI"]].values
+#     n = costs.shape[0]
+#     is_efficient = np.ones(n, dtype=bool)
+#     for i in range(n):
+#         dominating = (
+#             np.all(costs <= costs[i], axis=1) & np.any(costs < costs[i], axis=1)
+#         )
+#         if np.any(dominating):
+#             is_efficient[i] = False
+#     df["lies_on_front"] = is_efficient
+
+#     efficient = df[df["lies_on_front"]].sort_values("HHI").reset_index(drop=True)
+#     efficient["cost_bn"] = efficient["total_system_costs"] / 1e9
+#     df["cost_bn"] = df["total_system_costs"] / 1e9
+
+#     # --- select best option: lowest cost among frontier points within the
+#     #     low-concentration zone (HHI <= threshold); fallback to the
+#     #     frontier point closest to the threshold if none qualify ---
+#     within_zone = efficient[efficient["HHI"] <= hhi_threshold]
+#     if not within_zone.empty:
+#         best = within_zone.loc[within_zone["cost_bn"].idxmin()]
+#     else:
+#         best = efficient.loc[(efficient["HHI"] - hhi_threshold).abs().idxmin()]
+
+#     global_min_cost = df["cost_bn"].min()
+#     cost_premium = best["cost_bn"] - global_min_cost
+#     cost_premium_pct = cost_premium / global_min_cost * 100
+
+#     fig = go.Figure()
+
+#     # --- transparent blue "safe zone" for HHI <= threshold ---
+#     fig.add_vrect(
+#         x0=df["HHI"].min() - 50, x1=hhi_threshold,
+#         fillcolor="blue", opacity=0.08, line_width=0,
+#         annotation_text="Low concentration zone", annotation_position="top left"
+#     )
+
+#     # --- vertical threshold line ---
+#     fig.add_vline(
+#         x=hhi_threshold, line_width=2, line_dash="dash", line_color="blue",
+#         annotation_text=f"HHI threshold ({hhi_threshold})", annotation_position="top"
+#     )
+
+#     # --- horizontal line at the minimum optimal cost within the zone ---
+#     fig.add_hline(
+#         y=best["cost_bn"], line_width=2, line_dash="dash", line_color="blue",
+#         annotation_text=f"Min. cost within zone ({best['cost_bn']:.2f} bn €)",
+#         annotation_position="bottom left"
+#     )
+
+#     # --- smoothed trend/approximation curve: quadratic fit (trend, not
+#     #     an interpolation through every point) ---
+#     if len(efficient) >= 3:
+#         coeffs = np.polyfit(efficient["HHI"], efficient["cost_bn"], deg=2)
+#         trend = np.poly1d(coeffs)
+#         x_smooth = np.linspace(efficient["HHI"].min(), efficient["HHI"].max(), 200)
+#         y_smooth = trend(x_smooth)
+#         fig.add_trace(go.Scatter(
+#             x=x_smooth, y=y_smooth, mode="lines",
+#             line=dict(color="lightgrey", dash="dot", width=2),
+#             name="Trend approximation", hoverinfo="skip"
+#         ))
+
+#     # --- Trade of curve ---
+#     fig.add_trace(go.Scatter(
+#         x=efficient["HHI"], y=efficient["cost_bn"], mode="lines+markers",
+#         line=dict(color="black", width=2),
+#         marker=dict(size=8, color="black"),
+#         name="Trade of curve",
+#         text=efficient[["mtd", "mid"]].apply(lambda row: f"Max Total: {row['mtd']}, Max Indiv: {row['mid']}", axis=1)
+#     ))
+
+#     # --- per-point labels (disabled) ---
+#     # for row in efficient.itertuples():
+#     #     fig.add_annotation(
+#     #         x=row.HHI, y=row.cost_bn,
+#     #         text=f"({row.mtd:.1f}, {row.mid:.1f})",
+#     #         showarrow=False,
+#     #         yshift=36,
+#     #         font=dict(family="Times New Roman", size=11, color="black")
+#     #     )
+
+#     --- dominated points (disabled) ---
+#     fig.add_trace(go.Scatter(
+#         x=dominated["HHI"], y=dominated["total_system_costs"] / 1e9, mode="markers",
+#         marker=dict(size=6, color="lightgray"),
+#         name="Dominated"
+#     ))
+
+#     # --- best option, highlighted as a larger red dot, with a clear label ---
+#     fig.add_trace(go.Scatter(
+#         x=[best["HHI"]], y=[best["cost_bn"]], mode="markers",
+#         marker=dict(size=16, color="red", symbol="circle"),
+#         name="Selected optimum",
+#         text=f"Max Total: {best['mtd']}, Max Indiv: {best['mid']}"
+#     ))
+#     fig.add_annotation(
+#         x=best["HHI"], y=best["cost_bn"],
+#         text=f"{best['mtd']*100:.0f}% total dependence,<br>{best['mid']*100:.0f}% individual dependence",
+#         showarrow=True, arrowhead=2, ax=60, ay=-40,
+#         font=dict(family="Times New Roman", size=15, color="black"),
+#         bgcolor="white", bordercolor="red", borderwidth=1
+#     )
+
+#     # --- curly brace on the right side, under the legend:
+#     #     global min cost -> min cost within zone ---
+#     brace_x = 1.06    # paper coords, just right of the axis
+#     brace_width = 0.025
+#     fig.add_shape(
+#         type="path",
+#         xref="paper", yref="y",
+#         path=_curly_brace_path(brace_x, global_min_cost, best["cost_bn"], brace_width),
+#         line=dict(color="black", width=1.5),
+#     )
+#     fig.add_annotation(
+#         xref="paper", yref="y",
+#         x=brace_x + brace_width * 1.6,
+#         y=(global_min_cost + best["cost_bn"]) / 2,
+#         text=f"+{cost_premium:.2f} bn €<br>(+{cost_premium_pct:.1f}%)",
+#         showarrow=False,
+#         textangle=-90,
+#         xanchor="left",
+#         font=dict(family="Times New Roman", size=15, color="black")
+#     )
+
+#     # --- global formatting, matched to your matplotlib rcParams ---
+#     fig.update_layout(
+#         title="Total System Costs vs. Import Concentration",
+#         xaxis_title="HHI (market concentration)",
+#         yaxis_title="Total system costs [bn €]",
+#         template="plotly_white",
+#         font=dict(family="Times New Roman", color="black", size=20),
+#         xaxis=dict(title_font=dict(size=15), tickfont=dict(size=15)),
+#         yaxis=dict(title_font=dict(size=15), tickfont=dict(size=15)),
+#         legend=dict(font=dict(size=15), x=1.0, y=1.0, xanchor="left", yanchor="top"),
+#         margin=dict(r=160),  # extra room on the right for legend + brace + label
+#         width=1000, height=650
+#     )
+
+#     plt.ioff()
+#     fig.write_image(os.path.join(output_path, "figures", f"trade_of_curve_{n}n_{commodity}.png"), scale=4)
+#     return fig
+
+def plot_trade_off_curve_multi(hhi_dfs, cost_dfs, rfm_values, hhi_threshold=1500):
     """
-    Merge hhi_df and cost_df, identify the trade of curve frontier (minimizing
-    both HHI and total_system_costs), and plot it interactively with
-    Plotly. Highlights the HHI concentration threshold as a low-risk
-    "zone", marks the best option within the low-concentration zone in
-    red with a label of its dependence settings, and annotates the cost
-    premium of staying in that zone versus the global cost minimum via
-    a curly brace on the right side of the plot.
+    Plot trade-off curves for multiple rfm values in a single interactive plot.
 
-    Returns fig.
+    hhi_dfs: list of DataFrames with columns ["mtd", "mid", "HHI"]
+    cost_dfs: list of DataFrames with columns ["mtd", "mid", "total_system_costs"]
+    rfm_values: list of rfm values corresponding to each DataFrame pair
+    hhi_threshold: HHI threshold for the low-concentration zone
     """
-    df = hhi_df.merge(cost_df, on=["max_total", "max_indiv"]).reset_index(drop=True)
-
-    # --- identify trade-of-efficient front points ---
-    costs = df[["total_system_costs", "HHI"]].values
-    n = costs.shape[0]
-    is_efficient = np.ones(n, dtype=bool)
-    for i in range(n):
-        dominating = (
-            np.all(costs <= costs[i], axis=1) & np.any(costs < costs[i], axis=1)
-        )
-        if np.any(dominating):
-            is_efficient[i] = False
-    df["lies_on_front"] = is_efficient
-
-    efficient = df[df["lies_on_front"]].sort_values("HHI").reset_index(drop=True)
-    efficient["cost_bn"] = efficient["total_system_costs"] / 1e9
-    df["cost_bn"] = df["total_system_costs"] / 1e9
-
-    # --- select best option: lowest cost among frontier points within the
-    #     low-concentration zone (HHI <= threshold); fallback to the
-    #     frontier point closest to the threshold if none qualify ---
-    within_zone = efficient[efficient["HHI"] <= hhi_threshold]
-    if not within_zone.empty:
-        best = within_zone.loc[within_zone["cost_bn"].idxmin()]
-    else:
-        best = efficient.loc[(efficient["HHI"] - hhi_threshold).abs().idxmin()]
-
-    global_min_cost = df["cost_bn"].min()
-    cost_premium = best["cost_bn"] - global_min_cost
-    cost_premium_pct = cost_premium / global_min_cost * 100
+    # Sort rfm values and select colors from wistia_colors
+    sorted_rfm = sorted(rfm_values)
+    n_rfm = len(sorted_rfm)
+    color_indices = [int(i * 29 / max(1, n_rfm-1)) for i in range(n_rfm)]
+    curve_colors = [wistia_colors[i] for i in color_indices]
 
     fig = go.Figure()
 
-    # --- transparent blue "safe zone" for HHI <= threshold ---
-    fig.add_vrect(
-        x0=df["HHI"].min() - 50, x1=hhi_threshold,
-        fillcolor="blue", opacity=0.08, line_width=0,
-        annotation_text="Low concentration zone", annotation_position="top left"
-    )
+    # --- Plot trade-off curves for each rfm ---
+    for idx, (hhi_df, cost_df, color) in enumerate(zip(hhi_dfs, cost_dfs, curve_colors)):
+        df = hhi_df.merge(cost_df, on=["mtd", "mid"]).reset_index(drop=True)
 
-    # --- vertical threshold line ---
-    fig.add_vline(
-        x=hhi_threshold, line_width=2, line_dash="dash", line_color="blue",
-        annotation_text=f"HHI threshold ({hhi_threshold})", annotation_position="top"
-    )
+        # Identify trade-off curve frontier points
+        costs = df[["total_system_costs", "HHI"]].values
+        n = costs.shape[0]
+        is_efficient = np.ones(n, dtype=bool)
+        for i in range(n):
+            dominating = (
+                np.all(costs <= costs[i], axis=1) & np.any(costs < costs[i], axis=1)
+            )
+            if np.any(dominating):
+                is_efficient[i] = False
+        df["lies_on_front"] = is_efficient
 
-    # --- horizontal line at the minimum optimal cost within the zone ---
-    fig.add_hline(
-        y=best["cost_bn"], line_width=2, line_dash="dash", line_color="blue",
-        annotation_text=f"Min. cost within zone ({best['cost_bn']:.2f} bn €)",
-        annotation_position="bottom left"
-    )
+        efficient = df[df["lies_on_front"]].sort_values("HHI").reset_index(drop=True)
+        efficient["cost_bn"] = efficient["total_system_costs"] / 1e9
+        df["cost_bn"] = df["total_system_costs"] / 1e9
 
-    # --- smoothed trend/approximation curve: quadratic fit (trend, not
-    #     an interpolation through every point) ---
-    if len(efficient) >= 3:
-        coeffs = np.polyfit(efficient["HHI"], efficient["cost_bn"], deg=2)
-        trend = np.poly1d(coeffs)
-        x_smooth = np.linspace(efficient["HHI"].min(), efficient["HHI"].max(), 200)
-        y_smooth = trend(x_smooth)
+        # Select best option within low-concentration zone
+        within_zone = efficient[efficient["HHI"] <= hhi_threshold]
+        if not within_zone.empty:
+            best = within_zone.loc[within_zone["cost_bn"].idxmin()]
+        else:
+            best = efficient.loc[(efficient["HHI"] - hhi_threshold).abs().idxmin()]
+
+        # Add trade-off curve
         fig.add_trace(go.Scatter(
-            x=x_smooth, y=y_smooth, mode="lines",
-            line=dict(color="lightgrey", dash="dot", width=2),
-            name="Trend approximation", hoverinfo="skip"
+            x=efficient["HHI"],
+            y=efficient["cost_bn"],
+            mode="lines+markers",
+            line=dict(color=color, width=2),
+            marker=dict(size=8, color=color),
+            name=f"rfm={sorted_rfm[idx]:.2f}",
+            text=efficient[["mtd", "mid"]].apply(
+                lambda row: f"Max Total: {row['mtd']}, Max Indiv: {row['mid']}", axis=1
+            )
         ))
 
-    # --- Trade of curve ---
-    fig.add_trace(go.Scatter(
-        x=efficient["HHI"], y=efficient["cost_bn"], mode="lines+markers",
-        line=dict(color="black", width=2),
-        marker=dict(size=8, color="black"),
-        name="Trade of curve",
-        text=efficient[["max_total", "max_indiv"]].apply(lambda row: f"Max Total: {row['max_total']}, Max Indiv: {row['max_indiv']}", axis=1)
-    ))
+        # Add best option marker (only for the first rfm to avoid clutter)
+        if idx == 0:
+            global_min_cost = df["cost_bn"].min()
+            cost_premium = best["cost_bn"] - global_min_cost
+            cost_premium_pct = cost_premium / global_min_cost * 100
 
-    # --- per-point labels (disabled) ---
-    # for row in efficient.itertuples():
-    #     fig.add_annotation(
-    #         x=row.HHI, y=row.cost_bn,
-    #         text=f"({row.max_total:.1f}, {row.max_indiv:.1f})",
-    #         showarrow=False,
-    #         yshift=36,
-    #         font=dict(family="Times New Roman", size=11, color="black")
-    #     )
+            fig.add_trace(go.Scatter(
+                x=[best["HHI"]],
+                y=[best["cost_bn"]],
+                mode="markers",
+                marker=dict(size=16, color="red", symbol="circle"),
+                name="Selected optimum",
+                text=f"Max Total: {best['mtd']}, Max Indiv: {best['mid']}"
+            ))
+            fig.add_annotation(
+                x=best["HHI"],
+                y=best["cost_bn"],
+                text=f"{best['mtd']*100:.0f}% total dependence,<br>{best['mid']*100:.0f}% individual dependence",
+                showarrow=True,
+                arrowhead=2,
+                ax=60,
+                ay=-40,
+                font=dict(family="Times New Roman", size=15, color="black"),
+                bgcolor="white",
+                bordercolor="red",
+                borderwidth=1
+            )
 
-    # --- dominated points (disabled) ---
-    # fig.add_trace(go.Scatter(
-    #     x=dominated["HHI"], y=dominated["total_system_costs"] / 1e9, mode="markers",
-    #     marker=dict(size=6, color="lightgray"),
-    #     name="Dominated"
-    # ))
+            # Safe zone
+            fig.add_vrect(
+                x0=df["HHI"].min() - 50,
+                x1=hhi_threshold,
+                fillcolor="blue",
+                opacity=0.08,
+                line_width=0,
+                annotation_text="Low concentration zone",
+                annotation_position="top left"
+            )
 
-    # --- best option, highlighted as a larger red dot, with a clear label ---
-    fig.add_trace(go.Scatter(
-        x=[best["HHI"]], y=[best["cost_bn"]], mode="markers",
-        marker=dict(size=16, color="red", symbol="circle"),
-        name="Selected optimum",
-        text=f"Max Total: {best['max_total']}, Max Indiv: {best['max_indiv']}"
-    ))
-    fig.add_annotation(
-        x=best["HHI"], y=best["cost_bn"],
-        text=f"{best['max_total']*100:.0f}% total dependence,<br>{best['max_indiv']*100:.0f}% individual dependence",
-        showarrow=True, arrowhead=2, ax=60, ay=-40,
-        font=dict(family="Times New Roman", size=15, color="black"),
-        bgcolor="white", bordercolor="red", borderwidth=1
-    )
+            # Threshold line
+            fig.add_vline(
+                x=hhi_threshold,
+                line_width=2,
+                line_dash="dash",
+                line_color="blue",
+                annotation_text=f"HHI threshold ({hhi_threshold})",
+                annotation_position="top"
+            )
 
-    # --- curly brace on the right side, under the legend:
-    #     global min cost -> min cost within zone ---
-    brace_x = 1.06    # paper coords, just right of the axis
-    brace_width = 0.025
-    fig.add_shape(
-        type="path",
-        xref="paper", yref="y",
-        path=_curly_brace_path(brace_x, global_min_cost, best["cost_bn"], brace_width),
-        line=dict(color="black", width=1.5),
-    )
-    fig.add_annotation(
-        xref="paper", yref="y",
-        x=brace_x + brace_width * 1.6,
-        y=(global_min_cost + best["cost_bn"]) / 2,
-        text=f"+{cost_premium:.2f} bn €<br>(+{cost_premium_pct:.1f}%)",
-        showarrow=False,
-        textangle=-90,
-        xanchor="left",
-        font=dict(family="Times New Roman", size=15, color="black")
-    )
+            # Horizontal line at best option
+            fig.add_hline(
+                y=best["cost_bn"],
+                line_width=2,
+                line_dash="dash",
+                line_color="blue",
+                annotation_text=f"Min. cost within zone ({best['cost_bn']:.2f} bn €)",
+                annotation_position="bottom left"
+            )
 
-    # --- global formatting, matched to your matplotlib rcParams ---
+            # Curly brace and cost premium annotation
+            brace_x = 1.06
+            brace_width = 0.025
+            fig.add_shape(
+                type="path",
+                xref="paper", yref="y",
+                path=_curly_brace_path(brace_x, global_min_cost, best["cost_bn"], brace_width),
+                line=dict(color="black", width=1.5),
+            )
+            fig.add_annotation(
+                xref="paper", yref="y",
+                x=brace_x + brace_width * 1.6,
+                y=(global_min_cost + best["cost_bn"]) / 2,
+                text=f"+{cost_premium:.2f} bn €<br>(+{cost_premium_pct:.1f}%)",
+                showarrow=False,
+                textangle=-90,
+                xanchor="left",
+                font=dict(family="Times New Roman", size=15, color="black")
+            )
+
+    # --- Global formatting ---
     fig.update_layout(
-        title="Total System Costs vs. Import Concentration",
+        title="Total System Costs vs. Import Concentration (Multiple rfm Values)",
         xaxis_title="HHI (market concentration)",
         yaxis_title="Total system costs [bn €]",
         template="plotly_white",
         font=dict(family="Times New Roman", color="black", size=20),
         xaxis=dict(title_font=dict(size=15), tickfont=dict(size=15)),
         yaxis=dict(title_font=dict(size=15), tickfont=dict(size=15)),
-        legend=dict(font=dict(size=15), x=1.0, y=1.0, xanchor="left", yanchor="top"),
-        margin=dict(r=160),  # extra room on the right for legend + brace + label
-        width=1000, height=650
+        legend=dict(
+            font=dict(size=15),
+            x=1.0,
+            y=1.0,
+            xanchor="left",
+            yanchor="top"
+        ),
+        margin=dict(r=160),
+        width=1000,
+        height=650
     )
 
     plt.ioff()
-    fig.write_image(os.path.join(output_path, "figures", f"trade_of_curve_{n}n_{commodity}.png"), scale=4)
+    rfm_str = "_".join([f"{r*100:.0f}" for r in sorted_rfm])
+    fig.write_image(os.path.join(output_path, "figures", f"trade_of_curve_multi_rfm_{rfm_str}.png"), scale=4)
     return fig
+
+def get_transport_flows(solution):
+    # squeeze singleton dims, sum over supply_step to get total flow per edge
+    transport_total = (
+        solution["v_transport"]
+        .sum(dim="supply_step")
+        .sel(commodity="h2", scenario="Base")  # or .squeeze() if truly singleton
+    )
+
+    transport_df = transport_total.to_dataframe(name="transport_amount").reset_index()
+    # columns: region1, region2, transport_amount
+
+    # drop self-loops and zero flows to keep things light
+    transport_flows_df = transport_df[
+        (transport_df["region1"] != transport_df["region2"]) &
+        (transport_df["transport_amount"] > 1e-9)
+    ]
+    return transport_flows_df
 
 def load_transport_paths(output_path, transport_flows_df, commodity="h2", scenario="Base"):
     ### read paths if they exist
@@ -1145,10 +1577,10 @@ def load_transport_paths(output_path, transport_flows_df, commodity="h2", scenar
         paths_df["path_geometry"] = paths_df["path_geometry"].apply(
             lambda x: wkt.loads(x) if isinstance(x, str) else None
         )
+        # raw coordinates from the Dijkstra step are already WGS84 lon/lat degrees,
+        # so label them as such directly rather than mislabeling as a projected CRS
         paths_gdf = gpd.GeoDataFrame(paths_df, geometry="path_geometry", crs=default_epsg_1)
-        paths_gdf = paths_gdf.to_crs(default_epsg_2)
         paths_gdf["length"] = paths_gdf.length
-        paths_gdf = paths_gdf.to_crs(default_epsg_1)
         print("DataFrame loaded from file.")
     else:
         paths_gdf = pd.DataFrame()
@@ -1156,14 +1588,12 @@ def load_transport_paths(output_path, transport_flows_df, commodity="h2", scenar
         return paths_gdf
 
     # --- filter to the relevant commodity/scenario slice before indexing ---
-    # (skip this filter if transport_flows_df doesn't have these columns)
     flows = transport_flows_df
     if "commodity" in flows.columns:
         flows = flows[flows["commodity"] == commodity]
     if "scenario" in flows.columns:
         flows = flows[flows["scenario"] == scenario]
 
-    # guard against duplicate (region1, region2) rows after filtering
     dupe_count = flows.duplicated(subset=["region1", "region2"]).sum()
     if dupe_count > 0:
         print(f"Warning: {dupe_count} duplicate (region1, region2) rows after filtering — "
@@ -1209,30 +1639,13 @@ def load_transport_paths(output_path, transport_flows_df, commodity="h2", scenar
     )
     return paths_gdf
 
-def get_transport_flows(solution):
-    # squeeze singleton dims, sum over supply_step to get total flow per edge
-    transport_total = (
-        solution["v_transport"]
-        .sum(dim="supply_step")
-        .sel(commodity="h2", scenario="Base")  # or .squeeze() if truly singleton
-    )
-
-    transport_df = transport_total.to_dataframe(name="transport_amount").reset_index()
-    # columns: region1, region2, transport_amount
-
-    # drop self-loops and zero flows to keep things light
-    transport_flows_df = transport_df[
-        (transport_df["region1"] != transport_df["region2"]) &
-        (transport_df["transport_amount"] > 1e-9)
-    ]
-    return transport_flows_df
-
-def plot_transport_flows_map(paths_gdf, output_path, marginal_costs_df, max_total_dependence_rel=0.75, max_indiv_dependence_rel=0.2, rfm=1):
+def plot_transport_flows_map(paths_gdf, output_path, marginal_costs_df, mtd=0.8, mid=0.2, rfm=1,
+                              projection_type="natural earth"):
     FONT_FAMILY = "Times New Roman"
     FONT_COLOR = "black"
-    LABEL_SIZE = 14   # matches axes.labelsize
-    TICK_SIZE = 12    # matches xtick/ytick.labelsize
-    LEGEND_SIZE = 12  # matches legend.fontsize
+    LABEL_SIZE = 14
+    TICK_SIZE = 12
+    LEGEND_SIZE = 12
 
     fig = go.Figure()
 
@@ -1252,14 +1665,15 @@ def plot_transport_flows_map(paths_gdf, output_path, marginal_costs_df, max_tota
         marker_line_color="white",
         marker_line_width=0.5,
         zmin=mc_vmin, zmax=mc_vmax,
+        # marginal cost colorbar
         colorbar=dict(
             title=dict(text="", font=dict(family=FONT_FAMILY, size=LABEL_SIZE, color=FONT_COLOR)),
-            len=0.5, thickness=15,
-            x=0.80, y=0.5, xanchor="left",
+            len=0.4, thickness=10,          # was len=0.5, thickness=15
+            x=0.9, y=0.5, xanchor="left",
             tickvals=[mc_vmin, mc_vmax],
             ticktext=[f"{mc_vmin:.1f}", f"{mc_vmax:.1f}"],
             tickfont=dict(family=FONT_FAMILY, size=TICK_SIZE, color=FONT_COLOR),
-        ),
+    ),
         name="Marginal cost",
         showlegend=False,
     ))
@@ -1289,44 +1703,39 @@ def plot_transport_flows_map(paths_gdf, output_path, marginal_costs_df, max_tota
         name="Nodes",
         text=node_names_all,
         hoverinfo="text",
+        showlegend=False,
     ))
     nodes_trace_idx = len(fig.data) - 1
 
     # =========================================================
-    # Directional, log-scaled, width- and color-coded route lines
+    # Log-scaled route lines, colored by turquoise shade = volume
+    # (direction-based red/blue coloring removed — the from/to accounting
+    # behind net_transport was unreliable, so this now shows magnitude only,
+    # via both line thickness and color shade, no directional claim)
     # =========================================================
-    def add_directional_colored_lines(
+    def add_volume_colored_lines(
         gdf, fig,
         amount_col="gross_transport",
-        direction_col="net_transport",
         width_range=(1, 6), opacity=0.8,
         unit_divisor=1e6,  # MWh -> TWh for display only
     ):
         amounts = gdf[amount_col].values.astype(float)
-        directions = gdf[direction_col].values.astype(float)
 
         log_amounts = np.log1p(amounts)
         amin, amax = np.nanmin(log_amounts), np.nanmax(log_amounts)
-        norm_widths = (log_amounts - amin) / (amax - amin + 1e-12)
+        norm_amounts = (log_amounts - amin) / (amax - amin + 1e-12)
+
         wmin, wmax = width_range
-        widths = wmin + (wmax - wmin) * norm_widths
+        widths = wmin + (wmax - wmin) * norm_amounts
 
-        log_mag = np.log1p(np.abs(directions))
-        mmin, mmax = np.nanmin(log_mag), np.nanmax(log_mag)
-        norm_mag = (log_mag - mmin) / (mmax - mmin + 1e-12)
-
-        is_outgoing = directions <= 0
-
-        red_colors = pc.sample_colorscale("Reds", norm_mag.tolist())
-        blue_colors = pc.sample_colorscale("Blues", norm_mag.tolist())
+        turquoise_colors = pc.sample_colorscale("Teal", norm_amounts.tolist())
+        turquoise_colors = pc.sample_colorscale("Rainbow", norm_amounts.tolist())
 
         route_trace_pairs = []
-        for row_idx, (geom, w, outgoing) in enumerate(zip(gdf.geometry, widths, is_outgoing)):
-            color = red_colors[row_idx] if outgoing else blue_colors[row_idx]
+        for row_idx, (geom, w, color) in enumerate(zip(gdf.geometry, widths, turquoise_colors)):
             source = gdf["source"].iloc[row_idx]
             sink = gdf["sink"].iloc[row_idx]
             amount_twh = amounts[row_idx] / unit_divisor
-            net_twh = directions[row_idx] / unit_divisor
 
             lines = geom.geoms if geom.geom_type == "MultiLineString" else [geom]
             for line in lines:
@@ -1336,49 +1745,43 @@ def plot_transport_flows_map(paths_gdf, output_path, marginal_costs_df, max_tota
                     mode="lines",
                     line=dict(width=w, color=color),
                     showlegend=False,
-                    legendgroup="Outgoing" if outgoing else "Incoming",
+                    legendgroup="Transport volume",
                     hoverinfo="text",
-                    text=f"{source} → {sink}<br>net: {net_twh:.3g} TWh<br>gross: {amount_twh:.3g} TWh",
+                    text=f"{source} — {sink}<br>volume: {amount_twh:.3g} TWh",
                     opacity=opacity,
                 ))
                 route_trace_pairs.append((len(fig.data) - 1, source, sink))
 
-        # quantile-based ticks on the log-magnitude scale, converted to TWh for display
         quantiles = [0, 0.25, 0.5, 0.75, 1.0]
-        tick_orig_mag = np.nanquantile(np.abs(directions), quantiles)
-        tick_vals_transformed = np.log1p(tick_orig_mag)
-        tick_text = [f"{v / unit_divisor:.2g}" for v in tick_orig_mag]
+        tick_orig = np.nanquantile(amounts, quantiles)
+        tick_vals_transformed = np.log1p(tick_orig)
+        tick_text = [f"{v / unit_divisor:.2g}" for v in tick_orig]
 
-        legend_trace_idxs = []
-        colorbar_specs = [
-            ("Reds", 0.88, mmin, mmax),   # Outgoing
-            ("Blues", 0.96, mmin, mmax),  # Incoming
-        ]
-        for cmap, x_pos, cmin, cmax in colorbar_specs:
-            fig.add_trace(go.Scattergeo(
-                lon=[None], lat=[None],
-                mode="markers",
-                marker=dict(
-                    size=0.1,
-                    color=[cmin, cmax],
-                    colorscale=cmap,
-                    cmin=cmin, cmax=cmax,
-                    colorbar=dict(
-                        title=dict(text="", font=dict(family=FONT_FAMILY, size=LABEL_SIZE, color=FONT_COLOR)),
-                        len=0.5, thickness=15,
-                        x=x_pos, y=0.5, xanchor="left",
-                        tickvals=tick_vals_transformed,
-                        ticktext=tick_text,
-                        tickfont=dict(family=FONT_FAMILY, size=TICK_SIZE, color=FONT_COLOR),
-                    ),
-                    showscale=True,
+        fig.add_trace(go.Scattergeo(
+            lon=[None], lat=[None],
+            mode="markers",
+            marker=dict(
+                size=0.1,
+                color=[amin, amax],
+                colorscale="Rainbow", #colorscale="Teal",
+                cmin=amin, cmax=amax,
+                # transport volume colorbar
+                colorbar=dict(
+                    title=dict(text="", font=dict(family=FONT_FAMILY, size=LABEL_SIZE, color=FONT_COLOR)),
+                    len=0.4, thickness=10,
+                    x=0.98, y=0.5, xanchor="left",
+                    tickvals=tick_vals_transformed,
+                    ticktext=tick_text,
+                    tickfont=dict(family=FONT_FAMILY, size=TICK_SIZE, color=FONT_COLOR),
                 ),
-                showlegend=False,
-                hoverinfo="skip",
-            ))
-            legend_trace_idxs.append(len(fig.data) - 1)
+                showscale=True,
+            ),
+            showlegend=False,
+            hoverinfo="skip",
+        ))
+        legend_trace_idx = len(fig.data) - 1
 
-        return route_trace_pairs, legend_trace_idxs
+        return route_trace_pairs, [legend_trace_idx]
 
     flow_gdf = paths_gdf[paths_gdf["gross_transport"] > 1e-9].copy().reset_index(drop=True)
 
@@ -1388,24 +1791,24 @@ def plot_transport_flows_map(paths_gdf, output_path, marginal_costs_df, max_tota
     if flow_gdf.empty:
         print("No routes with nonzero transport flow — nothing to plot.")
     else:
-        route_trace_pairs, legend_trace_idxs = add_directional_colored_lines(flow_gdf, fig)
+        route_trace_pairs, legend_trace_idxs = add_volume_colored_lines(flow_gdf, fig)
 
     # =========================================================
-    # Vertical colorbar labels, positioned to the left of each bar
+    # Vertical colorbar labels — now just 2: marginal cost + transport volume
     # =========================================================
-    colorbar_x_positions = [0.78, 0.87, 0.96]
-    colorbar_labels = ["Marginal cost (€/MWh)", "Outgoing flow (TWh)", "Incoming flow (TWh)"]
+    colorbar_x_positions = [0.9, 0.98]  # was [0.80, 0.88]
+    colorbar_labels = ["Marginal cost (€/MWh)", "Transport volume (TWh)"]
 
     annotations = []
     for x_pos, label in zip(colorbar_x_positions, colorbar_labels):
         annotations.append(dict(
             text=label,
             xref="paper", yref="paper",
-            x=x_pos - 0.045, y=0.5,
+            x=x_pos - 0.03, y=0.5,   # was x_pos - 0.045 — labels sit closer to their bars now
             xanchor="center", yanchor="middle",
             textangle=-90,
             showarrow=False,
-            font=dict(family=FONT_FAMILY, size=LABEL_SIZE, color=FONT_COLOR),
+            font=dict(family=FONT_FAMILY, size=LABEL_SIZE - 1, color=FONT_COLOR),  # slightly smaller
         ))
 
     # --- dropdown menu to filter routes by country node ---
@@ -1439,7 +1842,7 @@ def plot_transport_flows_map(paths_gdf, output_path, marginal_costs_df, max_tota
         updatemenus=[
             dict(
                 buttons=buttons, direction="down",
-                x=0.01, y=0.99, xanchor="left", yanchor="top",
+                x=0.01, y=0.9, xanchor="left", yanchor="top",
                 showactive=True, pad=dict(t=0, r=0),
                 font=dict(family=FONT_FAMILY, size=TICK_SIZE, color=FONT_COLOR),
             )
@@ -1447,28 +1850,31 @@ def plot_transport_flows_map(paths_gdf, output_path, marginal_costs_df, max_tota
         annotations=annotations,
     )
 
+    # --- tighter geo domain: colorbars need much less width than 28% ---
     fig.update_geos(
-        projection_type="orthographic",
+        projection_type=projection_type,
         showland=True, landcolor="lightgrey",
         showocean=True, oceancolor="lightblue",
         showcountries=True, countrycolor="white",
         showcoastlines=True, coastlinecolor="white",
-        domain=dict(x=[0, 0.72], y=[0, 1])
+        domain=dict(x=[0, 0.85], y=[0, 1]),  # was 0.72 — map now uses most of the canvas
     )
 
     fig.update_layout(
         title=dict(
             text="Nodes, Terminals, and Connections — select a country to filter routes",
             font=dict(family=FONT_FAMILY, size=LABEL_SIZE + 2, color=FONT_COLOR),
+            y=0.98, yanchor="top",
+            automargin=True,
         ),
-        height=1000, width=1500,
+        height=700, width=1300,
         font=dict(family=FONT_FAMILY, size=TICK_SIZE, color=FONT_COLOR),
-        legend=dict(itemsizing="constant", font=dict(family=FONT_FAMILY, size=LEGEND_SIZE, color=FONT_COLOR)),
-        margin=dict(r=180),  # extra right margin so the 3 stacked colorbars + labels aren't clipped
+        showlegend=False,
+        margin=dict(t=40, b=0, l=20, r=90),
     )
 
-    fig.write_image(os.path.join(output_path, "figures", f"transport_flow_globe_{max_total_dependence_rel*100:.0f}_{max_indiv_dependence_rel*100:.0f}_rfm{rfm*100:.0f}.png"), scale=2)
-    fig.write_html(os.path.join(output_path, "figures", f"transport_flow_globe_{max_total_dependence_rel*100:.0f}_{max_indiv_dependence_rel*100:.0f}_rfm{rfm*100:.0f}.html"), include_plotlyjs='cdn')
+    fig.write_image(os.path.join(output_path, "figures", "transport_flow", f"transport_flow_map_{mtd*100:.0f}_{mid*100:.0f}_rfm{rfm*100:.0f}.png"), scale=2)
+    fig.write_html(os.path.join(output_path, "figures", "transport_flow", f"transport_flow_map_{mtd*100:.0f}_{mid*100:.0f}_rfm{rfm*100:.0f}.html"), include_plotlyjs='cdn')
 
     plt.ioff()
     return
@@ -1527,201 +1933,586 @@ def load_market_results_in_df(runs, rfm_sweep):
     print(rfm_sweep_results_df)
     return rfm_sweep_results_df
 
-def plot_rfm_sens_selec_country(rfm_sweep_results_df):
-    # Create a subplot for each country with uniform spacing
+def compute_export_decomposition(solution, data_2D, country, commodity="h2", scenario="Base"):
+    """Exports FROM `country` TO each destination partner, summed over supply_step."""
+    transport = solution["v_transport"].sel(region1=country, commodity=commodity, scenario=scenario)
+    export_df = transport.sum(dim="supply_step").to_dataframe(name="amount").reset_index()
+    export_df = export_df[(export_df["region2"] != country) & (export_df["amount"] > 1e-6)]
+    return export_df.set_index("region2")["amount"]
+
+def get_domestic_and_demand(run, country, commodity="h2", scenario="Base"):
+    """Fetch a country's raw (gross) production and demand directly from the
+    run's own data, independent of whether it has any import relationships."""
+    data_1D = run["data_1D"]
+    solution = run["solution"]
+
+    domestic_prod = float(
+        solution["v_supply_segment"].sel(region=country, commodity=commodity, scenario=scenario).sum()
+    )
+    demand = float(
+        data_1D["demand"].sel(region=country, commodity=commodity, scenario=scenario,
+                                supply_step=base_step_param)
+    )
+    return domestic_prod, demand
+
+def plot_rfm_sens_selec_country(rfm_sweep_results_df, rfm_sweep_runs,
+                                 commodity="h2", scenario="Base"):
+    FONT_FAMILY = "Times New Roman"
+    
+    mtd = rfm_sweep_runs[1]["meta"]["max_total_dependence_rel"]
+    mid = rfm_sweep_runs[1]["meta"]["max_indiv_dependence_rel"]
+
     fig = make_subplots(
         rows=1,
         cols=len(countries_of_interest),
         subplot_titles=countries_of_interest,
-        horizontal_spacing=0.05,  # Uniform spacing between columns
-        vertical_spacing=0.05
+        horizontal_spacing=0.02,
+        vertical_spacing=0.05,
     )
 
-    # Create a dictionary to map source countries to colors
+    # --- import-side colors: source country -> shade of orange/wistia ---
     source_country_colors = {}
     for i, source_country in enumerate(rfm_sweep_results_df["Source Country"].unique()):
         source_country_colors[source_country] = wistia_colors[i % len(wistia_colors)]
 
-    # Create a custom legend
-    legend_items = [
-        {"name": "Domestic Production", "color": "turquoise"},
-        {"name": "Demand", "color": "red"}
-    ]
+    # --- export-side colors: destination country -> shade of teal ---
+    export_destinations = set()
+    export_by_country_rfm = {}
+    for country in countries_of_interest:
+        for rfm in rfm_sweep:
+            run = rfm_sweep_runs.get(rfm)
+            if run is None:
+                continue
+            exports = compute_export_decomposition(run["solution"], run["data_2D"], country,
+                                                     commodity=commodity, scenario=scenario)
+            export_by_country_rfm[(country, rfm)] = exports
+            export_destinations.update(exports.index)
 
-    # Add source countries to the legend
-    for source_country in rfm_sweep_results_df["Source Country"].unique():
-        legend_items.append({"name": source_country, "color": source_country_colors[source_country]})
+    export_destinations = sorted(export_destinations)
+    teal_colors = pc.sample_colorscale(
+        "Teal", [i / max(1, len(export_destinations) - 1) for i in range(len(export_destinations))]
+    ) if export_destinations else ["teal"]
+    export_dest_colors = {dest: teal_colors[i % len(teal_colors)] for i, dest in enumerate(export_destinations)}
 
-    # Store demand values for each country
     demand_values = {}
 
-    # Loop through each country in the countries_of_interest
     for i, country in enumerate(countries_of_interest):
-        # Filter the DataFrame for the current country
         country_data = rfm_sweep_results_df[rfm_sweep_results_df["Region"] == country]
 
-        # Check if there's any data for this country
-        if country_data.empty:
-            print(f"No data available for country: {country}")
-            continue
-
-        # Extract the demand for the country
-        if "Demand" in country_data.columns and not country_data["Demand"].empty:
-            demand = country_data["Demand"].iloc[0]
-            demand_values[country] = demand
-        else:
-            demand = 0
-            demand_values[country] = 0
-
-        # Loop through each rfm in the rfm_sweep
         for rfm in rfm_sweep:
-            # Filter the DataFrame for the current rfm
-            rfm_data = country_data[country_data["RFM"] == rfm]
-
-            # Check if there's any data for this RFM value
-            if rfm_data.empty:
+            run = rfm_sweep_runs.get(rfm)
+            if run is None:
                 continue
 
-            # Extract the domestic production and import volumes
-            domestic_prod = rfm_data["Domestic Production"].iloc[0] if not rfm_data["Domestic Production"].empty else 0
-            imports = rfm_data.groupby("Source Country")["Imports"].sum()
+            raw_domestic_prod, demand = get_domestic_and_demand(run, country,
+                                                                  commodity=commodity, scenario=scenario)
+            demand_values[country] = demand
 
-            # Create a stacked bar trace for domestic production in turquoise
+            rfm_data = country_data[country_data["RFM"] == rfm] if not country_data.empty else pd.DataFrame()
+            imports = rfm_data.groupby("Source Country")["Imports"].sum() if not rfm_data.empty else pd.Series(dtype=float)
+
+            exports = export_by_country_rfm.get((country, rfm), pd.Series(dtype=float))
+            total_exports = float(exports.sum())
+            domestic_retained = max(0.0, raw_domestic_prod - total_exports)
+
             fig.add_trace(
                 go.Bar(
-                    x=[rfm],
-                    y=[domestic_prod],
-                    name=f"Domestic Production",
-                    marker_color="turquoise",
-                    text=[f"Domestic"],
-                    textposition="auto",
-                    hoverinfo="text",
-                    showlegend=False  # Disable automatic legend
+                    x=[rfm], y=[domestic_retained], name="Domestic Production",
+                    marker_color="turquoise", text=["Domestic"], textposition="auto",
+                    hoverinfo="text", showlegend=False,
                 ),
-                row=1,
-                col=i+1,
+                row=1, col=i + 1,
             )
-
-            # Check if there are any imports
+            if not exports.empty:
+                for dest_country, export_volume in exports.items():
+                    fig.add_trace(
+                        go.Bar(
+                            x=[rfm], y=[export_volume], name=f"Export: {dest_country}",
+                            marker_color=export_dest_colors.get(dest_country, teal_colors[0]),
+                            text=[dest_country], textposition="auto", hoverinfo="text",
+                            showlegend=False,
+                        ),
+                        row=1, col=i + 1,
+                    )
             if not imports.empty:
-                # Create a stacked bar trace for each source country's imports
                 for source_country, import_volume in imports.items():
                     fig.add_trace(
                         go.Bar(
-                            x=[rfm],
-                            y=[import_volume],
-                            name=source_country,  # Shortened label to only show source country name
+                            x=[rfm], y=[import_volume], name=source_country,
                             marker_color=source_country_colors.get(source_country, wistia_colors[0]),
-                            text=[f"{source_country}"],
-                            textposition="auto",
-                            hoverinfo="text",
-                            showlegend=False  # Disable automatic legend
+                            text=[source_country], textposition="auto", hoverinfo="text",
+                            showlegend=False,
                         ),
-                        row=1,
-                        col=i+1,
+                        row=1, col=i + 1,
                     )
 
-        # Add a horizontal line for the domestic demand across all subplots
-        # Using a scatter plot for the demand line
+        demand = demand_values.get(country, 0)
         fig.add_trace(
             go.Scatter(
-                x=rfm_sweep,
-                y=[demand] * len(rfm_sweep),  # Convert from MWh to GWh
-                mode='lines',
-                line=dict(color='red', width=3),
-                name='Demand',
-                showlegend=False,
-                # legendgroup="group1"
+                x=rfm_sweep, y=[demand] * len(rfm_sweep), mode="lines",
+                line=dict(color="red", width=3), name="Demand", showlegend=False,
             ),
-            row=1,
-            col=i+1,
+            row=1, col=i + 1,
         )
 
-    # Add custom legend
-    for item in legend_items:
-        fig.add_trace(
-            go.Scatter(
-                x=[None],
-                y=[None],
-                mode="markers",
-                marker=dict(size=8, color=item["color"]),
-                showlegend=True,
-                name=item["name"],
-                legendgroup="group1"
-            )
-        )
+    # --- legend: Domestic production + Domestic demand, same row as the colorbars ---
+    FOOTER_Y = -0.1
 
-    # Update the layout with specific parameters and global template
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None], mode="markers", marker=dict(size=10, color="turquoise"),
+        showlegend=True, name="Domestic Production",
+        legend="legend1",  # just a reference string here
+    ))
+    fig.add_trace(go.Scatter(
+        x=[None], y=[None], mode="lines", line=dict(color="red", width=3),
+        showlegend=True, name="Domestic Demand",
+        legend="legend2",  # different reference string for the second legend
+    ))
+
     fig.update_layout(
-        title_text="Domestic Production and Import Volumes by Relationship Factor Magnitude (rfm)",
-        xaxis_title="Relationship Factor Magnitude (rfm)",
-        yaxis_title="Volume [MWh]",
-        barmode="stack",
-        height=900,
-        width=1200,
-        font=dict(family="Times New Roman", color="black"),
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        xaxis=dict(
-            tickfont=dict(color="black", size=12),
-            title=dict(standoff=15, font=dict(size=14))
+        legend1=dict(
+            orientation="h", yanchor="middle", y=FOOTER_Y, xanchor="center", x=0.2,
+            itemsizing="constant", font=dict(size=14),
         ),
-        yaxis=dict(
-            tickfont=dict(color="black", size=12),
-            title=dict(standoff=15, font=dict(size=14))
+        legend2=dict(
+            orientation="h", yanchor="middle", y=FOOTER_Y, xanchor="center", x=0.4,
+            itemsizing="constant", font=dict(size=14),
         ),
-        legend=dict(
-            orientation="v",
-            yanchor="middle",
-            y=0.5,
-            xanchor="right",
-            x=1.2,
-            itemsizing="constant",
-            font=dict(size=12),
-            title=dict(font=dict(size=12))  # Optional: Adjust title font size if needed
-        )
     )
 
-    # Set x-axis title for all subplots
-    for i in range(1, len(countries_of_interest) + 1):
-        fig.update_xaxes(
-            title_text="Relationship Factor Magnitude (rfm)",
-            row=1,
-            col=i
-        )
+    import_country_list = list(source_country_colors.keys())
+    export_country_list = list(export_dest_colors.keys())
 
-    # Ensure all rfm values are visible on the x-axis
-    for i in range(1, len(countries_of_interest) + 1):
-        fig.update_xaxes(
-            tickvals=rfm_sweep,
-            row=1,
-            col=i
-        )
+    if import_country_list:
+        import_colorscale = pc.make_colorscale(list(source_country_colors.values()))
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None], mode="markers",
+            marker=dict(
+                size=0.1, color=[0, 1], colorscale=import_colorscale, cmin=0, cmax=1,
+                showscale=True,
+                colorbar=dict(
+                    orientation="h", x=0.6, xanchor="center", y=FOOTER_Y, yanchor="middle",
+                    len=0.16, thickness=10,
+                    title=dict(text="Countries imported from", font=dict(family=FONT_FAMILY, size=14)),
+                    tickvals=[],
+                ),
+            ),
+            showlegend=False, hoverinfo="skip",
+        ))
 
-    # Save the plot as an image and HTML file
+    if export_country_list:
+        export_colorscale = pc.make_colorscale(list(export_dest_colors.values()))
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None], mode="markers",
+            marker=dict(
+                size=0.1, color=[0, 1], colorscale=export_colorscale, cmin=0, cmax=1,
+                showscale=True,
+                colorbar=dict(
+                    orientation="h", x=0.8, xanchor="center", y=FOOTER_Y, yanchor="middle",
+                    len=0.16, thickness=10,
+                    title=dict(text="Countries exportet to", font=dict(family=FONT_FAMILY, size=14)),
+                    tickvals=[],
+                ),
+            ),
+            showlegend=False, hoverinfo="skip",
+        ))
+
+    fig.update_layout(
+        title_text="Country-wise production, import and export for relationship factor magnitude (rfm) sensitivity",
+        barmode="stack",
+        bargap = 0.05,
+        height=900, width=1800,
+        font=dict(family=FONT_FAMILY, color="black"),
+        plot_bgcolor="white", paper_bgcolor="white",
+        xaxis=dict(tickfont=dict(color="black", size=12), title=dict(standoff=15, font=dict(size=14))),
+        yaxis=dict(title_text="Volume [MWh]", tickfont=dict(color="black", size=12), title=dict(standoff=15, font=dict(size=14))),
+        margin=dict(b=130),
+    )
+
+    for i in range(1, len(countries_of_interest) + 1):
+        fig.update_xaxes(type="category", title_text="rfm", tickvals=rfm_sweep, row=1, col=i)
+
     os.makedirs(os.path.join(output_path, "figures"), exist_ok=True)
+    fig.write_image(os.path.join(output_path, "figures", f"relationship_sensitivity_analysis_{mtd*100:.0f}_{mid*100:.0f}.png"), scale=4)
+    fig.write_html(os.path.join(output_path, "figures", f"relationship_sensitivity_analysis_{mtd*100:.0f}_{mid*100:.0f}.html"), include_plotlyjs='cdn')
 
-    # Save as PNG
-    fig.write_image(os.path.join(output_path, "figures", f"relationship_sensitivity_analysis_{max_total_dependence_rel*100:.0f}_{max_indiv_dependence_rel*100:.0f}_rfm{rfm*100:.0f}.png"), scale=4)
+    return fig
 
-    # Save as HTML
-    fig.write_html(os.path.join(output_path, "figures", f"relationship_sensitivity_analysis_{max_total_dependence_rel*100:.0f}_{max_indiv_dependence_rel*100:.0f}_rfm{rfm*100:.0f}.html"), include_plotlyjs='cdn')
+def compute_country_trade_stats(solution, data_2D, rfm, commodity="h2", scenario="Base"):
+    """Per-country trade stats for a single run, tagged with its rfm value.
+    net_position: positive = net exporter, negative = net importer
+    (i.e. exports - imports, matching the requested x-axis convention)."""
+    transport = solution["v_transport"].sel(commodity=commodity, scenario=scenario)
+    transport_by_route = transport.sum(dim="supply_step")
 
-    # Show the plot
-    return fig.show()
+    self_loop_mask = xr.DataArray(
+        data_2D.region1.values[:, None] == data_2D.region2.values[None, :],
+        dims=["region1", "region2"],
+        coords={"region1": data_2D.region1, "region2": data_2D.region2},
+    )
+    flows_df = transport_by_route.where(~self_loop_mask).to_dataframe(name="amount").reset_index()
+    flows_df = flows_df.dropna(subset=["amount"])
+    flows_df = flows_df[flows_df["amount"] > 1e-6]
+
+    records = []
+    for country in data_2D.region1.values:
+        exports = flows_df[flows_df["region1"] == country]
+        imports = flows_df[flows_df["region2"] == country]
+
+        partners = set(exports["region2"]).union(set(imports["region1"]))
+        n_relations = len(partners)
+
+        total_exports = float(exports["amount"].sum())
+        total_imports = float(imports["amount"].sum())
+        net_position = total_exports - total_imports  # positive = net exporter, negative = net importer
+
+        records.append({
+            "rfm": rfm,
+            "country": country,
+            "n_relations": n_relations,
+            "total_traded_quantity": total_exports + total_imports,
+            "net_position": net_position,
+        })
+
+    return pd.DataFrame(records)
+
+def compute_country_trade_stats_all_rfm(rfm_sweep_runs, commodity="h2", scenario="Base"):
+    """Runs compute_country_trade_stats for every rfm in the sweep and concatenates."""
+    all_stats = []
+    for rfm, run in rfm_sweep_runs.items():
+        stats = compute_country_trade_stats(run["solution"], run["data_2D"], rfm,
+                                              commodity=commodity, scenario=scenario)
+        all_stats.append(stats)
+    mtd = rfm_sweep_runs[1]["meta"]["max_total_dependence_rel"]
+    mid = rfm_sweep_runs[1]["meta"]["max_indiv_dependence_rel"]
+    return pd.concat(all_stats, ignore_index=True), mtd, mid
+
+
+def plot_country_trade_scatter(country_stats_df, output_path, mtd, mid, log_x):
+    """Plotly scatter, all rfm sensitivities in one plot.
+    x = net trade volume (exports - imports; positive = net exporter, negative = net importer)
+    y = number of active trade relations
+    color = rfm sensitivity run (sequential turquoise, darker = LOWER rfm)
+    size = |net trade volume| (diameter)
+    labels = country name shown once per country, at its highest-rfm point only
+    log_x = symmetric log transform on the x-axis (handles negative values correctly,
+            since a plain log scale can't). Set to False to revert to a linear x-axis.
+    """
+    FONT_FAMILY = "Times New Roman"
+    FONT_COLOR = "black"
+    LABEL_SIZE = 14
+    TICK_SIZE = 12
+
+    df = country_stats_df[country_stats_df["total_traded_quantity"] > 0].copy()
+
+    df["abs_net_position"] = df["net_position"].abs()
+    size_min, size_max = 6, 60
+    max_abs = df["abs_net_position"].max()
+    df["marker_size"] = size_min if max_abs == 0 else (
+        size_min + (size_max - size_min) * (df["abs_net_position"] / max_abs)
+    )
+
+    rfm_values = sorted(df["rfm"].unique())
+
+    # sequential turquoise shades: DARK -> light as rfm increases (reversed from before)
+    turquoise_scale = ["#5fb8a8", "#45c9b1", "#2ea88f", "#17a589", "#0e6655", "#073b31"]
+    n = len(rfm_values)
+    if n == 1:
+        color_map = {rfm_values[0]: turquoise_scale[0]}
+    else:
+        idxs = np.linspace(0, len(turquoise_scale) - 1, n)
+        color_map = {rfm: turquoise_scale[int(round(i))] for rfm, i in zip(rfm_values, idxs)}
+
+    max_rfm = max(rfm_values)
+
+    # --- symmetric log transform for the x-axis, since values can be negative ---
+    if log_x:
+        df["x_plot"] = np.sign(df["net_position"]) * np.log10(1 + df["net_position"].abs())
+    else:
+        df["x_plot"] = df["net_position"]
+
+    fig = go.Figure()
+    for rfm in rfm_values:
+        sub = df[df["rfm"] == rfm]
+
+        fig.add_trace(go.Scatter(
+            x=sub["x_plot"],
+            y=sub["n_relations"],
+            mode="markers+text",
+            text=sub["country"],
+            textposition="top center",
+            textfont=dict(family=FONT_FAMILY, size=8, color=color_map[rfm]),
+            marker=dict(size=sub["marker_size"], color=color_map[rfm], opacity=0.6,
+                         line=dict(width=1, color=color_map[rfm])),
+            name=f"rfm = {rfm}",
+            customdata=sub["net_position"],
+            hovertemplate="<b>" + sub["country"].astype(str) + "</b><br>Net trade volume: %{customdata:.3g}<br>"
+                          "Relations: %{y}<br>rfm: " + str(rfm) + "<extra></extra>",
+        ))
+
+    fig.add_vline(x=0, line=dict(color="grey", width=1, dash="solid"))
+
+    xaxis_config = dict(
+        title=dict(text="Net trade volume (MWh)  ←  net importer   |   net exporter  →",
+                    font=dict(family=FONT_FAMILY, size=LABEL_SIZE, color=FONT_COLOR)),
+        tickfont=dict(family=FONT_FAMILY, size=TICK_SIZE, color=FONT_COLOR),
+        showline=True, linecolor="black", gridcolor="lightgrey", zeroline=False,
+    )
+
+    if log_x:
+        # manually generate readable tick labels on the transformed axis,
+        # since Plotly's native log type can't be used with negative values
+        max_val = df["net_position"].abs().max()
+        if max_val > 0:
+            order = int(np.ceil(np.log10(max_val)))
+            tick_raw = [10**k for k in range(0, order + 1)]
+            tick_vals = [0] + [np.sign(v) * np.log10(1 + abs(v)) for v in tick_raw + [-t for t in tick_raw]]
+            tick_text = ["0"] + [f"{v:,.0f}" for v in tick_raw] + [f"-{v:,.0f}" for v in tick_raw]
+            xaxis_config["tickvals"] = tick_vals
+            xaxis_config["ticktext"] = tick_text
+
+    fig.update_layout(
+        title=dict(text="Trade relations vs. net trade volume across relationship factor magnitude (rfm) sensitivities"
+                        + (" (symlog x-axis)" if log_x else ""),
+                    font=dict(family=FONT_FAMILY, size=LABEL_SIZE + 2, color=FONT_COLOR)),
+        xaxis=xaxis_config,
+        yaxis=dict(title=dict(text="Number of active trade relations",
+                                font=dict(family=FONT_FAMILY, size=LABEL_SIZE, color=FONT_COLOR)),
+                    tickfont=dict(family=FONT_FAMILY, size=TICK_SIZE, color=FONT_COLOR)),
+        font=dict(family=FONT_FAMILY, size=TICK_SIZE, color=FONT_COLOR),
+        legend=dict(title=dict(text="Sensitivity run"), font=dict(family=FONT_FAMILY, size=TICK_SIZE)),
+        height=800, width=1500,
+        plot_bgcolor="white",
+    )
+    fig.update_yaxes(showline=False, gridcolor="lightgrey")
+
+    os.makedirs(os.path.join(output_path, "figures"), exist_ok=True)
+    fig.write_image(os.path.join(output_path, "figures", f"trade_distribution_scatter_{mtd*100:.0f}_{mid*100:.0f}.png"), scale=2)
+    fig.write_html(os.path.join(output_path, "figures", f"trade_distribution_scatter_{mtd*100:.0f}_{mid*100:.0f}.html"), include_plotlyjs="cdn")
+    return fig
+
+### Helper: filter the full list of model runs by mtd / mid / rfm ###
+def filter_runs(all_runs, mtd=None, mid=None, rfm=None):
+    """Filter a list of run dicts (as returned by load_all_model_runs) by
+    max_total_dependence_rel (mtd), max_indiv_dependence_rel (mid), and/or
+    relationship_factor_magnitude (rfm). Any filter left as None is not applied,
+    i.e. that dimension is swept over all available values.
+    """
+    filtered = []
+    for run in all_runs:
+        meta = run["metadata"]
+        if mtd is not None and meta.get("max_total_dependence_rel") != mtd:
+            continue
+        if mid is not None and meta.get("max_indiv_dependence_rel") != mid:
+            continue
+        if rfm is not None and meta.get("relationship_factor_magnitude") != rfm:
+            continue
+        filtered.append(run)
+    return filtered
+
+# def plot_hhi_vs_rfm(hhi_df, hhi_col="hhi", rfm_col="relationship_factor_magnitude"):
+#     df_sorted = hhi_df.sort_values(rfm_col)
+#     fig, ax = plt.subplots(figsize=(10, 6))
+#     ax.plot(df_sorted[rfm_col], df_sorted[hhi_col], marker="o", color="darkred", linewidth=2)
+#     ax.set_xlabel("Relationship factor magnitude (rfm)")
+#     ax.set_ylabel("HHI")
+#     ax.set_title("HHI sensitivity to relationship factor magnitude")
+#     ax.grid(True, alpha=0.3)
+#     os.makedirs(os.path.join(output_path, "figures"), exist_ok=True)
+#     fig.savefig(os.path.join(output_path, "figures", "hhi_vs_rfm.png"), dpi=300, bbox_inches="tight")
+#     return fig
+
+def compute_macro_metrics(rfm_sweep_runs, commodity="h2", scenario="Base"):
+    records = []
+
+    for rfm, run in rfm_sweep_runs.items():
+        solution = run["solution"]
+        data_1D = run["data_1D"]
+        data_2D = run["data_2D"]
+
+        supply = solution["v_supply_segment"].sel(commodity=commodity, scenario=scenario)
+        price = data_1D["price"].sel(commodity=commodity, scenario=scenario)
+        transport = solution["v_transport"].sel(commodity=commodity, scenario=scenario)
+        transport_cost_rate = data_2D["transport_cost"].sel(commodity=commodity, scenario=scenario)
+        vom_multiplier = data_2D["vom_multiplier"].sel(commodity=commodity, scenario=scenario)
+
+        total_supply = float(supply.sum())
+        supply_cost = float((supply * price).sum())
+        avg_marginal_cost = supply_cost / total_supply if total_supply > 0 else np.nan
+
+        transport_by_route = transport.sum(dim="supply_step")  # dims: region1, region2
+        self_loop_mask = xr.DataArray(
+            data_2D.region1.values[:, None] == data_2D.region2.values[None, :],
+            dims=["region1", "region2"],
+            coords={"region1": data_2D.region1, "region2": data_2D.region2},
+        )
+
+        total_traded = float(transport_by_route.where(~self_loop_mask, 0).sum())
+        transport_cost = float(
+            (transport_by_route * transport_cost_rate * vom_multiplier)
+            .where(~self_loop_mask, 0).sum()
+        )
+
+        # --- NEW: number of active trade relations + flow size distribution ---
+        # convert to a flat series and drop self-loops, then look only at nonzero flows
+        flows_flat = transport_by_route.where(~self_loop_mask).to_dataframe(name="amount")["amount"]
+        nonzero_flows = flows_flat[flows_flat > 1e-6]  # small tolerance instead of exact > 0
+
+        n_active_relations = int(len(nonzero_flows))
+        mean_flow_size = float(nonzero_flows.mean()) if n_active_relations > 0 else np.nan
+        median_flow_size = float(nonzero_flows.median()) if n_active_relations > 0 else np.nan
+
+        # bottom_up = compute_bottom_up_costs(solution, data_1D, data_2D, commodity=commodity, scenario=scenario)
+
+        # domestic_production_cost = bottom_up["domestic_production_cost"]
+        # traded_cost = bottom_up["transport_cost"] if False else bottom_up["traded_cost"]  # (see note below)
+        total_domestic_production = total_supply - total_traded
+        total_system_costs = supply_cost + transport_cost  # exact, reverted from bottom-up sum
+
+        # bottom-up decomposition kept for reference/diagnostics, not used for the total anymore
+        # bottom_up = compute_bottom_up_costs(solution, data_1D, data_2D, commodity=commodity, scenario=scenario)
+        # domestic_production_cost = bottom_up["domestic_production_cost"]
+        # traded_cost = bottom_up["traded_cost"]
+
+        records.append({
+            "rfm": rfm,
+            "total_system_costs": total_system_costs,
+            "supply_cost": supply_cost,
+            "transport_cost": transport_cost,
+            # "domestic_production_cost": domestic_production_cost,
+            # "traded_cost": traded_cost,
+            "average_marginal_cost": avg_marginal_cost,
+            "total_supply": total_supply,
+            "total_traded_volume": total_traded,
+            "total_domestic_production": total_domestic_production,
+            "n_active_relations": n_active_relations,
+            "mean_flow_size": mean_flow_size,
+            "median_flow_size": median_flow_size,
+        })
+
+    return pd.DataFrame(records)
+
+def plot_macro_sensitivity(macro_df, hhi_df, output_path,
+                            rfm_col="rfm", hhi_rfm_col="relationship_factor_magnitude",
+                            baseline_rfm=1.0):
+    df = macro_df.sort_values(rfm_col).merge(
+        hhi_df.rename(columns={hhi_rfm_col: rfm_col}), on=rfm_col, how="left"
+    )
+
+    # relative % change vs. the baseline rfm value
+    baseline = df[df[rfm_col] == baseline_rfm].iloc[0]
+    rel_cols = ["total_system_costs", "average_marginal_cost", "total_traded_volume", "hhi",
+                "n_active_relations", "mean_flow_size"]
+    for col in rel_cols:
+        df[f"{col}_pct_change"] = (df[col] - baseline[col]) / baseline[col] * 100
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    axes = axes.flatten()
+
+    # --- panel 1: total system costs, decomposed into domestic vs. traded ---
+    ax = axes[0]
+    ax.plot(df[rfm_col], df["total_system_costs"], marker="o", color="steelblue", linewidth=2)
+    ax.set_xlabel("Relationship factor magnitude (rfm)")
+    ax.set_ylabel("Total system costs")
+    ax.set_title("Total system costs")
+    ax.grid(True, alpha=0.3)
+
+    # --- panel 2: average marginal cost (absolute) ---
+    ax = axes[1]
+    ax.plot(df[rfm_col], df["average_marginal_cost"], marker="o", color="darkorange", linewidth=2)
+    ax.set_xlabel("Relationship factor magnitude (rfm)")
+    ax.set_ylabel("Average marginal cost [€/MWh]")
+    ax.set_title("Average marginal cost")
+    ax.grid(True, alpha=0.3)
+
+    # --- panel 3: HHI (standalone) ---
+    ax = axes[2]
+    ax.plot(df[rfm_col], df["hhi"], marker="o", color="darkred", linewidth=2)
+    ax.set_xlabel("Relationship factor magnitude (rfm)")
+    ax.set_ylabel("HHI")
+    ax.set_title("Market concentration (HHI)")
+    ax.grid(True, alpha=0.3)
+
+    # --- panel 4: domestic vs traded volume, absolute ---
+    ax = axes[3]
+    ax.stackplot(df[rfm_col], df["total_domestic_production"], df["total_traded_volume"],
+                 labels=["Domestic production", "Traded volume"],
+                 colors=["mediumseagreen", "cornflowerblue"], alpha=0.8)
+    ax.set_xlabel("Relationship factor magnitude (rfm)")
+    ax.set_ylabel("Volume [MWh]")
+    ax.set_title("Domestic production vs. traded volume")
+    ax.legend(loc="best")
+    ax.grid(True, alpha=0.3)
+
+    # --- panel 5: relative % change from baseline (rfm=1) across all key metrics ---
+    ax = axes[4]
+    colors = {"total_system_costs": "steelblue", "average_marginal_cost": "darkorange",
+              "total_traded_volume": "cornflowerblue", "hhi": "darkred",
+              "n_active_relations": "teal", "mean_flow_size": "purple"}
+    labels = {"total_system_costs": "System costs", "average_marginal_cost": "Avg. marginal cost",
+              "total_traded_volume": "Traded volume", "hhi": "HHI",
+              "n_active_relations": "Active relations", "mean_flow_size": "Mean flow size"}
+    for col in rel_cols:
+        ax.plot(df[rfm_col], df[f"{col}_pct_change"], marker="o", linewidth=2,
+                 color=colors[col], label=labels[col])
+    ax.axhline(0, color="grey", linewidth=1, linestyle=":")
+    ax.set_xlabel("Relationship factor magnitude (rfm)")
+    ax.set_ylabel(f"Change vs. rfm={baseline_rfm} (%)")
+    ax.set_title("Relative change from baseline")
+    ax.legend(loc="best", fontsize=8)
+    ax.grid(True, alpha=0.3)
+
+    # --- panel 6: number of active trade relations + mean/median flow size ---
+    ax = axes[5]
+    ax2 = ax.twinx()
+
+    l1, = ax.plot(df[rfm_col], df["n_active_relations"], marker="o", color="teal",
+                   linewidth=2, label="Active trade relations (count)")
+
+    # annotate each point with its count value, since the line alone can be
+    # hard to read against the flow-size axis
+    for x, y in zip(df[rfm_col], df["n_active_relations"]):
+        ax.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8),
+                    ha="center", fontsize=9, color="teal")
+
+    l2, = ax2.plot(df[rfm_col], df["mean_flow_size"], marker="s", color="purple",
+                    linewidth=2, linestyle="--", label="Mean flow size (MWh)")
+    l3, = ax2.plot(df[rfm_col], df["median_flow_size"], marker="^", color="mediumorchid",
+                    linewidth=2, linestyle=":", label="Median flow size (MWh)")
+
+    ax.set_xlabel("Relationship factor magnitude (rfm)")
+    ax.set_ylabel("Number of active trade relations", color="teal")
+    ax2.set_ylabel("Flow size (MWh)", color="purple")
+    ax.set_title("Trade relation count & flow size")
+    ax.legend(handles=[l1, l2, l3], loc="best", fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+    # headroom on both axes so annotations and legend don't overlap the lines
+    ymin, ymax = ax.get_ylim()
+    ax.set_ylim(ymin * 0.95, ymax * 1.05)
+    ymin2, ymax2 = ax2.get_ylim()
+    ax2.set_ylim(ymin2, ymax2 * 1.1)
+
+    fig.suptitle("Macroscopic sensitivity to relationship factor magnitude", fontsize=16)
+
+    os.makedirs(os.path.join(output_path, "figures"), exist_ok=True)
+    fig.savefig(os.path.join(output_path, "figures", "macro_sensitivity_rfm.png"),
+                dpi=default_dpi, bbox_inches="tight")
+
+    return fig
 
 data_path = os.path.join(this_dir, "data")
 output_path = os.path.join(this_dir, "output")
 print("Work in working directory: " + str(this_dir))
 
 ### Define static parameters ###
-# default epsg for geoplots
-default_epsg_1 = "EPSG:4326"
-# default epsg for projections for determining lengths
-default_epsg_2 = "EPSG:6933"
-reference_region = "EU-DEU"
+default_epsg_1 = "EPSG:4326"      # default epsg for geoplots
+default_epsg_2 = "EPSG:6933"      # default epsg for projections for determining lengths
+# reference_region = "EU-DEU"
 commodity = "h2"
 scenario = "Base"
+# static rfm
+# rfm = 1.5 # delete as soon as all runs have the frm in the metadata
 
 ### Define central parameter values ###
 case_study = get_settings(parameter="case_study")
@@ -1730,99 +2521,201 @@ base_step_param = get_settings(parameter="base_step")
 print("Visualise with base step: " + str(base_step_param))
 
 ### Define a small function to directly call a certain run from the model saves ###
-def run_name(n=159, mtd=0.75, mid=0.2, rfm=1.5):
+def run_name(n=159, mtd=0.8, mid=0.2, rfm=1.5):
     return f"model_run_{n}n_{case_study}_{mtd*100:.0f}_{mid*100:.0f}_rfm{rfm*100:.0f}"
 
 ### Define the individual base run to analyse if you dont make any sweeps ###
-model_run = run_name(mtd=0.75, mid=0.2, rfm=1)
+model_run = run_name(mtd=0.8, mid=0.2, rfm=1)
 print("Load base model as " + str(model_run))
 
-# import model run
-data_1D, data_2D, solution, meta_data = load_model_run(os.path.join(output_path), model_run)
-# import model
-model = load_complete_model(os.path.join(output_path), model_run)
+# import base model run (used for the one-time visualisations below)
+data_1D, data_2D, solution, meta_data = load_model_run(output_path, model_run)
+model = load_complete_model(output_path, model_run)
 print("Loaded model input data for base model run " + str(model))
 
-### Now load model run dependend data ###
 regions = solution.region.values
 commodities = solution.commodity.values
-max_total_dependence_rel = meta_data["max_total_dependence_rel"]
-max_indiv_dependence_rel = meta_data["max_indiv_dependence_rel"]
-rfm = meta_data["relationship_factor_magnitude"]
-n = meta_data["n"]
 
-### define the sewwping lists for e.g. relationship factor, dependecy constraints and the visualisation country selection ###
+### define the sweeping lists for e.g. relationship factor, dependency constraints, and country selection ###
 rfm_sweep = [1, 1.2, 1.5, 1.8, 2]
-countries_of_interest = ["EU-DEU", "EU-ITA", "AS-TUR"]
+countries_of_interest = ["EU-DEU", "AS-KOR", "AS-TUR", "AF-EGY", "AF-NGA", "SA-BRA", "AF-ZAF", "AS-TWN"] # "AS-CHN",
 
-runs = {}
-for rfm in rfm_sweep:
-    name = run_name(rfm=rfm)
-    data_1D, data_2D, solution, meta = load_model_run(output_path, name)
-
-    if meta is not None:
-        assert meta["relationship_factor_magnitude"] == rfm, (
-            f"{name}: metadata rfm={meta['relationship_factor_magnitude']} != expected {rfm} -- name/meta mismatch"
-        )
-
-    runs[rfm] = {"data_1D":data_1D, "data_2D": data_2D, "solution": solution, "meta": meta}
-
-# write the results into a dataframe that can be used in subsequent plotting
-rfm_sweep_results_df = load_market_results_in_df(runs, rfm_sweep)
 #%%
-
-### First of all general pre solution visualisation - only to be conducted once ###
+# =============================================================================
+# SECTION 1 — One-time visualisations (not tied to any specific run)
+# =============================================================================
 print("Plotting supply curves")
 plot_supply_curves(data_1D)
-plot_supply_curves2(data_1D)
+print("Plotted supply curves")
+plt.close('all')
 
-### Secondly, all global visualisations for every run ###
-hhi_results = {}
-print("Calculating HHI")
-hhi = calculate_hhi(solution)
-print("Plotting Sankey flow diagram for trade relations")
-# plot_sankey_flows(solution, hhi)
-print("Plotting supply and demand donut charts")
-plot_supply_demand_donuts(solution)
-plot_sankey_flows(solution, hhi_results)
+#%%
+# =============================================================================
+# SECTION 2 — Per-run visualisations, looped over filtered model runs
+# =============================================================================
+all_runs = load_all_model_runs(output_path)
 
-### plot trade flows
-print("Getting marginals")
-marginals = model.constraints["c_balance"].dual.copy()
-marginal_costs_df = marginals_to_df(marginals)
-marginal_costs_df = marginals_to_df(marginals, commodity="h2", scenario="Base")
-print(marginal_costs_df)
-print("Getting transport flow values")
-transport_flows_df = get_transport_flows(solution)
-print("Load transport paths")
-paths_gdf = load_transport_paths(output_path, transport_flows_df)
-print("Plotting transport flow map")
-plot_transport_flows_map(paths_gdf, output_path, marginal_costs_df, max_total_dependence_rel, max_indiv_dependence_rel, rfm)
+# set any of these to None to sweep over all available values for that dimension
+mtd_filter = 0.8 # None #0.8
+mid_filter = 0.2 # None # 0.2
+rfm_filter = None  # e.g. None to loop over every rfm sensitivity run
 
+selected_runs = filter_runs(all_runs, mtd=mtd_filter, mid=mid_filter, rfm=rfm_filter)
+print(f"Running per-run visualisations for {len(selected_runs)} run(s): "
+      f"{[r['run_name'] for r in selected_runs]}")
 
-### Thirdly, all combined global visualisations ###
+per_run_meta = {}  # lightweight only — keeps just metadata, not the full datasets
 
-## analyse the HHI dependence sensitivity across all model runs ###
-runs = load_all_model_runs(output_path)
-rfm_runs = [run for run in runs if "rfm100" in run["run_name"]]
-hhi_df, cost_df = analyse_results(output_path, rfm_runs)
-regions = solution.region.values.tolist()
+for run in selected_runs:
+    run_name_str = run["run_name"]
+
+    # skip runs missing the rfm field, since they predate that parameter
+    if "relationship_factor_magnitude" not in run["metadata"]:
+        print(f"Skipping {run_name_str} — no rfm metadata (legacy run, needs recalculation)")
+        continue
+
+    print(f"\n--- Per-run visualisations for {run_name_str} ---")
+
+    run_data_1D, run_data_2D, run_solution, run_meta = load_model_run(output_path, run_name_str)
+    run_model = load_complete_model(output_path, run_name_str)
+
+    mtd = run_meta["max_total_dependence_rel"]
+    mid = run_meta["max_indiv_dependence_rel"]
+    rfm = run_meta["relationship_factor_magnitude"]
+
+    hhi_results = {}
+    print("Calculating HHI")
+    hhi = calculate_hhi(run_solution)
+
+    print("Plotting supply and demand donut charts")
+    plot_supply_demand_donuts(run_solution, mtd, mid, rfm)
+    plt.close('all')
+
+    print("Plotting Sankey flow diagram for trade relations")
+    # plot_sankey_flows(run_solution, hhi_results, mtd, mid, rfm)
+    plot_sankey_flows_selected(run_solution, hhi_results, mtd, mid, rfm, countries_of_interest)
+    plt.close('all')
+
+    print("Getting marginals")
+    marginals = run_model.constraints["c_balance"].dual.copy()
+    marginal_costs_df = marginals_to_df(marginals, commodity=commodity, scenario=scenario)
+
+    print("Getting transport flow values")
+    transport_flows_df = get_transport_flows(run_solution)
+    print("Load transport paths")
+    paths_gdf = load_transport_paths(output_path, transport_flows_df)
+    print("Plotting transport flow map")
+    plot_transport_flows_map(paths_gdf, output_path, marginal_costs_df, mtd, mid, rfm, projection_type="natural earth")
+    plt.close('all')
+
+    print("Plotting supply composition")
+    for country in countries_of_interest:
+        print(f"  -> {country}")
+        plot_supply_composition(run_model, run_solution, mtd, mid, rfm, country)
+        plt.close('all')
+
+    # keep only lightweight metadata around after this run
+    per_run_meta[run_name_str] = run_meta
+
+    # empty memory after each run so it doesn't accumulate across the loop
+    del run_data_1D, run_data_2D, run_solution, run_model
+    gc.collect()
+
+#%%
+# =============================================================================
+# SECTION 3 — Combined visualisations across model runs
+# =============================================================================
+
+## A) analyse the HHI/dependence sensitivity across the mtd x mid grid, at a fixed rfm ###
+mtd_mid_runs = [
+    r for r in all_runs
+    if r["metadata"].get("relationship_factor_magnitude", 1.0) == 1.0
+]
+hhi_df, cost_df = analyse_results(output_path, mtd_mid_runs)
+
+# sanity check — contour/surface needs at least 2 unique values per axis
+unique_mtd = hhi_df["mtd"].nunique()
+unique_mid = hhi_df["mid"].nunique()
+print(f"mtd x mid grid: {unique_mtd} unique mtd values, {unique_mid} unique mid values, "
+      f"{len(hhi_df)} total runs")
+
 n = len(regions)
-plot_hhi_sens(hhi_df)
-plot_cost_sens(cost_df)
-plot_trade_off_curve(hhi_df, cost_df)
 
-### Fourthly, all selected country visualisations for every run ###
-print("Plotting supply composition")
-plot_supply_composition(model, solution)
+## build the rfm-sweep dataset used for the selected-country sensitivity plot ###
+rfm_sweep_runs = {}
+rfm_hhi_records = []
 
-### Fifthly, all selected country visualisations for the combined runs ###
-print("Plotting sensitivity analysis for relationship factor magnitude")
-plot_rfm_sens_selec_country(rfm_sweep_results_df)
+for rfm in rfm_sweep:
+    name = run_name(rfm=rfm)
+    sweep_data_1D, sweep_data_2D, sweep_solution, sweep_meta = load_model_run(output_path, name)
+
+    if sweep_meta is not None:
+        assert sweep_meta["relationship_factor_magnitude"] == rfm, (
+            f"{name}: metadata rfm={sweep_meta['relationship_factor_magnitude']} != expected {rfm} -- name/meta mismatch"
+        )
+
+    rfm_sweep_runs[rfm] = {
+        "data_1D": sweep_data_1D, "data_2D": sweep_data_2D,
+        "solution": sweep_solution, "meta": sweep_meta,
+    }
+
+    rfm_hhi_records.append({"relationship_factor_magnitude": rfm, "hhi": calculate_hhi(sweep_solution)})
+
+rfm_sweep_results_df = load_market_results_in_df(rfm_sweep_runs, rfm_sweep)
+
+## plot HHI across the rfm sweep (1D line, NOT the mtd/mid trade-off curve) ###
+rfm_hhi_df = pd.DataFrame(rfm_hhi_records)
+# plot_hhi_vs_rfm(rfm_hhi_df)
+macro_df = compute_macro_metrics(rfm_sweep_runs)
+plot_macro_sensitivity(macro_df, rfm_hhi_df, output_path)
+
+plot_rfm_sens_selec_country(rfm_sweep_results_df, rfm_sweep_runs)
+
+print("Plotting country trade relations scatter")
+country_stats_all_df, mtd, mid = compute_country_trade_stats_all_rfm(rfm_sweep_runs)
+plot_country_trade_scatter(country_stats_all_df, output_path, mtd, mid, log_x = False)
+
+## Generate multi-rfm plots ###
+# Collect runs by rfm value
+rfm_runs = {}
+for r in all_runs:
+    rfm_val = r["metadata"].get("relationship_factor_magnitude", 1)
+    if rfm_val not in rfm_runs:
+        rfm_runs[rfm_val] = []
+    rfm_runs[rfm_val].append(r)
+
+# Select which rfm values to include in the multi-plot
+rfm_values_to_plot = sorted([rfm for rfm in rfm_runs.keys() if len(rfm_runs[rfm]) > 0])
+
+if len(rfm_values_to_plot) >= 2:  # Need at least 2 to show multiple surfaces
+    print(f"\nGenerating multi-rfm plots for rfm values: {rfm_values_to_plot}")
+
+    # Generate DataFrames for each selected rfm
+    hhi_dfs = []
+    cost_dfs = []
+    for rfm in rfm_values_to_plot:
+        hhi_df, cost_df = analyse_results(output_path, rfm_runs[rfm])
+        hhi_dfs.append(hhi_df)
+        cost_dfs.append(cost_df)
+
+    # Generate the multi-rfm plots
+    plot_hhi_sens_multi(hhi_dfs, rfm_values_to_plot)
+    plot_cost_sens_multi(cost_dfs, rfm_values_to_plot)
+    # Generate the multi-rfm trade-off curve
+    plot_trade_off_curve_multi(hhi_dfs, cost_dfs, rfm_values_to_plot)
+else:
+    print("Not enough rfm values with sufficient data to generate multi-rfm plots")
+
+plt.close('all')
 
 #%%
 #empty memory
-del data_1D, data_2D, solution, meta_data, model #, runs, hhi_df
+for v in ['run_data_1D','run_data_2D','run_solution','run_model']:
+    if v in locals():
+        o = locals()[v]
+        if hasattr(o, 'close'): o.close()
+        del locals()[v]
+gc.collect()
 
 STOP = time.perf_counter()
 print('Total execution time of script',round((STOP-START), 1), 's')

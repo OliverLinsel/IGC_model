@@ -10,9 +10,12 @@ import time
 
 def load_model_run(output_path, name):
     run_dir = os.path.join(output_path, "model", name)
-    data_1D = xr.open_dataset(os.path.join(run_dir, "input_1D.nc"))
-    data_2D = xr.open_dataset(os.path.join(run_dir, "input_2D.nc"))
-    sol = xr.open_dataset(os.path.join(run_dir, "solution.nc"))
+    data_1D = xr.open_dataset(os.path.join(run_dir, "input_1D.nc")).load()
+    data_1D.close()
+    data_2D = xr.open_dataset(os.path.join(run_dir, "input_2D.nc")).load()
+    data_2D.close()
+    sol = xr.open_dataset(os.path.join(run_dir, "solution.nc")).load()
+    sol.close()
  
     meta_fp = os.path.join(run_dir, "metadata.json")
     meta = None
