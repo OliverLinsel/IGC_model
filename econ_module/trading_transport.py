@@ -124,7 +124,7 @@ terminals_gdf = terminals_gdf[terminals_gdf["node"].isin(regions_list)].reset_in
 terminals_gdf = terminals_gdf.set_crs(default_epsg_1)
 # terminals_gdf = terminals_gdf.to_crs(default_epsg_2)
 
-nodes_gdf
+#%%
 
 ### create connection lines by combining the terminal_gdf geometry with the nodes_gdf geometry to a Line geometry
 connections_df = nodes_gdf[["name", "geometry", "commodity", "WACC"]].merge(terminals_gdf[["terminal_name", "commodity", "name", "node", "geometry", "alternative"]], left_on="name", right_on="node", how="right")
@@ -211,14 +211,15 @@ pipelines_gdf["end_point"]   = pipelines_gdf.geometry.apply(lambda g: Point(g.co
 pipeline_data_gdf_select = pd.DataFrame()
 pipeline_data_gdf_select = pipeline_data_gdf[["name", "alternative", "commodity", "total_cost_MWh", "geometry"]].copy()
 
+#%%
 # --- Harmonize terminal columns to match region columns for joint merge ---
-terminals_gdf_select = terminals_gdf[["terminal_name", "alternative", "commodity", "geometry"]].copy()
-terminals_gdf_select["selector"] = terminals_gdf_select["terminal_name"].str.split("_").str[-1]
+terminals_gdf_select = terminals_gdf[["name", "alternative", "commodity", "geometry"]].copy()
+terminals_gdf_select["selector"] = terminals_gdf_select["name"].str.split("_").str[-1]
 terminals_gdf_select["selector"] = terminals_gdf_select["selector"].str.split("-").str[:2].str.join("-")
 # merge pipeline_data_gdf["total_cost_MWh"] via name onto terminals_gdf_select
 terminals_gdf_select = pd.merge(terminals_gdf_select, pipeline_data_gdf_select[["name", "total_cost_MWh"]], left_on="selector", right_on="name", how="left")
-terminals_gdf_select = terminals_gdf_select.drop(columns=["selector", "name"])
-terminals_gdf_select = terminals_gdf_select.rename(columns={"terminal_name": "name"})
+terminals_gdf_select = terminals_gdf_select.drop(columns=["selector", "name_y"])
+terminals_gdf_select = terminals_gdf_select.rename(columns={"name_x": "name"})
 
 # --- Combine regions + terminals into one lookup source ---
 combined_select = pd.concat([pipeline_data_gdf_select, terminals_gdf_select], ignore_index=True)
@@ -270,6 +271,7 @@ terminals_gdf = terminals_gdf.rename(columns={"name": "commodity_terminal_name"}
 terminals_gdf = terminals_gdf.merge(pipeline_data_gdf[["name", "WACC", "regional_factor", "cost_el"]], left_on="node", right_on="name", how="left")
 
 terminals_gdf["capacity"] = 1000 # dummy value - replace!
+#%%
 
 ### Calculate the cost factors for invest, fom and vom for conversion ###
 terminals_gdf["conversion_annuity_factor"] = (terminals_gdf["WACC"] * (1 + terminals_gdf["WACC"]) ** terminals_gdf["conversion_lifetime"]) / ((1 + terminals_gdf["WACC"]) ** terminals_gdf["conversion_lifetime"] - 1)
@@ -323,53 +325,65 @@ terminals_gdf["efficiency"] = (terminals_gdf["conversion_efficiency_substantial"
                                 * terminals_gdf["shipping_efficiency_flat"]
                                 * terminals_gdf["reconversion_efficiency_substantial"] * terminals_gdf["reconversion_efficiency_energetic"])
 terminals_gdf["efficiency_km"] = terminals_gdf["shipping_efficiency_km"]
+#%%
 
-def calculate_searoute(origin, destination):
-    origin_lon = terminals_gdf.query(f"terminal_name=='{origin}'")["lon"].values
-    origin_lat = terminals_gdf.query(f"terminal_name=='{origin}'")["lat"].values
-    destination_lon = terminals_gdf.query(f"terminal_name=='{destination}'")["lon"].values
-    destination_lat = terminals_gdf.query(f"terminal_name=='{destination}'")["lat"].values
-    p_origin = [origin_lon[0], origin_lat[0]]
-    p_destination = [destination_lon[0], destination_lat[0]]
-    route = sr.searoute(p_origin, p_destination, speed_knot = 13, append_orig_dest= True)
+def calculate_searoute_by_coords(p_origin, p_destination):
+    """Route calculation based on raw coordinates, decoupled from terminal naming."""
+    route = sr.searoute(p_origin, p_destination, speed_knot=13, append_orig_dest=True)
     sr_geo = LineString(route["geometry"]["coordinates"])
     return route["properties"]["duration_hours"], route["properties"]["length"], route["geometry"]["coordinates"], sr_geo
 
-names = (terminals_gdf.terminal_name.to_list())
-names = set(names)
-names = list(names)
+
+# --- step 1: generate all origin-destination combinations at the commodity_terminal_name level ---
+names = terminals_gdf["commodity_terminal_name"].unique().tolist()
 combinations_names = np.array(list(combinations(names, 2)))
 
 df_sr = pd.DataFrame(columns=["origin", "destination"])
+df_sr["origin"] = combinations_names[:, 0]
+df_sr["destination"] = combinations_names[:, 1]
 
-df_sr["origin"] = combinations_names[:,0]
-df_sr["destination"] = combinations_names[:,1]
+# --- step 2: attach coordinates + node + commodity for both origin and destination ---
+lookup = terminals_gdf.set_index("commodity_terminal_name")[["node", "commodity", "lat", "lon"]]
 
-duration_list = []
-length_list = []
-coord_list = []
-geo_list = []
+df_sr = df_sr.merge(lookup.add_prefix("origin_"), left_on="origin", right_index=True)
+df_sr = df_sr.merge(lookup.add_prefix("destination_"), left_on="destination", right_index=True)
 
-for i in df_sr.index:
-    o = df_sr.iloc[i]["origin"]
-    d = df_sr.iloc[i]["destination"]
-    duration, length, coord, sr_geo_out = calculate_searoute(o, d)
-    duration_list.append(duration)
-    length_list.append(length)
-    coord_list.append(coord)
-    geo_list.append(sr_geo_out)
+# --- step 3 (optional but recommended): only keep same-commodity pairs ---
+df_sr = df_sr[df_sr["origin_commodity"] == df_sr["destination_commodity"]].reset_index(drop=True)
 
-df_sr["duration_hours"] = duration_list
-df_sr["length"] = length_list
-# df_sr["coordinates"] = coord_list
+# --- step 4: deduplicate route calculation by physical node pair, since the geometry
+df_sr["node_pair"] = df_sr.apply(
+    lambda r: tuple(sorted([r["origin_node"], r["destination_node"]])), axis=1
+)
 
+unique_node_pairs = df_sr.drop_duplicates(subset="node_pair")[
+    ["node_pair", "origin_lon", "origin_lat", "destination_lon", "destination_lat"]
+].reset_index(drop=True)
+
+route_cache = {}
+for _, row in unique_node_pairs.iterrows():
+    p_origin = [row["origin_lon"], row["origin_lat"]]
+    p_destination = [row["destination_lon"], row["destination_lat"]]
+    duration, length, coord, sr_geo_out = calculate_searoute_by_coords(p_origin, p_destination)
+    route_cache[row["node_pair"]] = {
+        "duration_hours": duration, "length": length, "geometry": sr_geo_out,
+    }
+
+# --- step 5: broadcast the cached route results back onto every commodity pair ---
+df_sr["duration_hours"] = df_sr["node_pair"].map(lambda np_: route_cache[np_]["duration_hours"])
+df_sr["length"] = df_sr["node_pair"].map(lambda np_: route_cache[np_]["length"])
+geo_list = df_sr["node_pair"].map(lambda np_: route_cache[np_]["geometry"]).tolist()
+
+df_sr = df_sr.drop(columns=["node_pair"])
 df_sr = gpd.GeoDataFrame(df_sr, geometry=geo_list, crs="EPSG:4326")
+#%%
 
 shipping_model_gdf = (
     df_sr
-    .merge(terminals_gdf[["terminal_name", "total_cost_MWh", "total_cost_MWh_km", "efficiency", "efficiency_km"]].add_suffix("_from"), left_on="origin", right_on="terminal_name_from", how="left")
-    .merge(terminals_gdf[["terminal_name", "total_cost_MWh", "total_cost_MWh_km"]].add_suffix("_to"), left_on="destination", right_on="terminal_name_to", how="left")
+    .merge(terminals_gdf[["commodity_terminal_name", "total_cost_MWh", "total_cost_MWh_km", "efficiency", "efficiency_km"]].add_suffix("_from"), left_on="origin", right_on="commodity_terminal_name_from", how="left")
+    .merge(terminals_gdf[["commodity_terminal_name", "total_cost_MWh", "total_cost_MWh_km"]].add_suffix("_to"), left_on="destination", right_on="commodity_terminal_name_to", how="left")
 )
+#%%
 
 shipping_model_gdf["name"] = shipping_model_gdf["origin"] + "_" + shipping_model_gdf["destination"]
 ## calculate average costs
@@ -381,7 +395,7 @@ shipping_model_gdf["total_cost_MWh"] = shipping_model_gdf["total_cost_MWh"] + sh
 shipping_model_gdf["efficiency"] = shipping_model_gdf["efficiency_from"] * (1 - shipping_model_gdf["efficiency_km_from"] * shipping_model_gdf["length"])
 
 shipping_gdf = shipping_model_gdf[["name", "length", "total_cost_MWh", "efficiency", "geometry"]]
-
+#%%
 print(pipelines_gdf.crs, bathymetry_gdf.crs, nodes_gdf.crs, world_gdf.crs, connections_gdf.crs, shipping_gdf.crs)
 
 ### Combine geometries with cost information to routing template
@@ -393,12 +407,13 @@ combined_gdf = pd.concat(
 combined_gdf = gpd.GeoDataFrame(combined_gdf, geometry='geometry')
 
 # calculate shadow price
-combined_gdf["total_cost_MWh"] = combined_gdf["total_cost_MWh"] / combined_gdf["efficiency"]**2
+combined_gdf["total_cost_MWh"] = combined_gdf["total_cost_MWh"] / combined_gdf["efficiency"]
 combined_gdf.to_excel(os.path.join(this_dir, "output", "model", "combined_transport_elements.xlsx"), index=False)
 print("Saved combined gdf with total_cost in €/MWh to file in " + str(os.path.join(this_dir, "output", "model")) + "\n")
 
 print("End of the preprocessing" + "\n")
 
+#%%
 ### Define routing functions ###
 
 def create_network_graph(routing_template_gdf, sources_gdf, precision=6):
@@ -576,7 +591,7 @@ else:
     print("Finished creating network graph G: " + str(G) + "\n")
     # Filter the sources dataframe
     nodes_gdf_filtered = nodes_gdf.copy()
-    nodes_gdf_filtered = nodes_gdf.head(5).reset_index(drop=True) # In case you need to test the script with a limited dataframe
+    # nodes_gdf_filtered = nodes_gdf.head(5).reset_index(drop=True) # In case you need to test the script with a limited dataframe
     print("Execute pathing for each nodes pair on network graph G: " + "\n")
     paths_gdf = dijkstra_connect_sources(G, nodes_gdf_filtered)
 
@@ -834,8 +849,8 @@ def plot_routed_paths(bathymetry_gdf=bathymetry_gdf, nodes_gdf=nodes_gdf, termin
 
 plot_potential_transport_system(path_or_raw = "raw")
 plot_potential_transport_system(path_or_raw = "path")
-selected_countries=["EU-DEU", "AS-CHN"]
-plot_routed_paths(selected_countries=selected_countries, projection_type="natural earth") #choose from projection:type either "orthographic" or "natural earth", mercator
+# selected_countries=["EU-DEU", "AS-CHN"]
+# plot_routed_paths(selected_countries=selected_countries, projection_type="natural earth") #choose from projection:type either "orthographic" or "natural earth", mercator
 
 STOP = time.perf_counter()
 print('Total execution time of script',round((STOP-START), 1), 's')

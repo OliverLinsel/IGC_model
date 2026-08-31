@@ -2501,6 +2501,73 @@ def plot_macro_sensitivity(macro_df, hhi_df, output_path,
 
     return fig
 
+def plot_macro_sensitivity_condensed(macro_df, output_path,
+                                      rfm_col="rfm", baseline_rfm=1.0):
+    df = macro_df.sort_values(rfm_col).copy()
+
+    # relative % change vs. the baseline rfm value
+    # (HHI dropped entirely; n_active_relations and mean_flow_size dropped here
+    # since they're already shown directly in panel 2)
+    baseline = df[df[rfm_col] == baseline_rfm].iloc[0]
+    rel_cols = ["total_system_costs", "average_marginal_cost", "total_traded_volume"]
+    for col in rel_cols:
+        df[f"{col}_pct_change"] = (df[col] - baseline[col]) / baseline[col] * 100
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+
+    # --- panel 1: relative % change from baseline (rfm=1) across key metrics ---
+    ax = axes[0]
+    colors = {"total_system_costs": "steelblue", "average_marginal_cost": "darkorange",
+              "total_traded_volume": "cornflowerblue"}
+    labels = {"total_system_costs": "System costs", "average_marginal_cost": "Avg. marginal cost",
+              "total_traded_volume": "Traded volume"}
+    for col in rel_cols:
+        ax.plot(df[rfm_col], df[f"{col}_pct_change"], marker="o", linewidth=2,
+                 color=colors[col], label=labels[col])
+    ax.axhline(0, color="grey", linewidth=1, linestyle=":")
+    ax.set_xlabel("Relationship factor magnitude (rfm)")
+    ax.set_ylabel(f"Change vs. rfm={baseline_rfm} (%)")
+    ax.set_title("Relative change from baseline")
+    ax.legend(loc="best", fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+    # --- panel 2: number of active trade relations + mean/median flow size ---
+    ax = axes[1]
+    ax2 = ax.twinx()
+
+    l1, = ax.plot(df[rfm_col], df["n_active_relations"], marker="o", color="teal",
+                   linewidth=2, label="Active trade relations (count)")
+
+    for x, y in zip(df[rfm_col], df["n_active_relations"]):
+        ax.annotate(f"{int(y)}", (x, y), textcoords="offset points", xytext=(0, 8),
+                    ha="center", fontsize=9, color="teal")
+
+    l2, = ax2.plot(df[rfm_col], df["mean_flow_size"], marker="s", color="purple",
+                    linewidth=2, linestyle="--", label="Mean flow size (MWh)")
+    l3, = ax2.plot(df[rfm_col], df["median_flow_size"], marker="^", color="mediumorchid",
+                    linewidth=2, linestyle=":", label="Median flow size (MWh)")
+
+    ax.set_xlabel("Relationship factor magnitude (rfm)")
+    ax.set_ylabel("Number of active trade relations", color="teal")
+    ax2.set_ylabel("Flow size (MWh)", color="purple")
+    ax.set_title("Trade relation count & flow size")
+    ax.legend(handles=[l1, l2, l3], loc="best", fontsize=9)
+    ax.grid(True, alpha=0.3)
+
+    ymin, ymax = ax.get_ylim()
+    ax.set_ylim(ymin * 0.95, ymax * 1.05)
+    ymin2, ymax2 = ax2.get_ylim()
+    ax2.set_ylim(ymin2, ymax2 * 1.1)
+
+    fig.suptitle("Macroscopic sensitivity to relationship factor magnitude", fontsize=15)
+    fig.tight_layout()
+
+    os.makedirs(os.path.join(output_path, "figures"), exist_ok=True)
+    fig.savefig(os.path.join(output_path, "figures", "macro_sensitivity_rfm_condensed.png"),
+                dpi=default_dpi, bbox_inches="tight")
+
+    return fig
+
 data_path = os.path.join(this_dir, "data")
 output_path = os.path.join(this_dir, "output")
 print("Work in working directory: " + str(this_dir))
@@ -2520,12 +2587,15 @@ print("Visualise case study: " + str(case_study))
 base_step_param = get_settings(parameter="base_step")
 print("Visualise with base step: " + str(base_step_param))
 
+mtd_init = 0.8
+mid_init = 0.2
+
 ### Define a small function to directly call a certain run from the model saves ###
-def run_name(n=159, mtd=0.8, mid=0.2, rfm=1.5):
+def run_name(n=159, mtd=mtd_init, mid=mid_init, rfm=1.5):
     return f"model_run_{n}n_{case_study}_{mtd*100:.0f}_{mid*100:.0f}_rfm{rfm*100:.0f}"
 
 ### Define the individual base run to analyse if you dont make any sweeps ###
-model_run = run_name(mtd=0.8, mid=0.2, rfm=1)
+model_run = run_name(mtd=mtd_init, mid=mid_init, rfm=1.5)
 print("Load base model as " + str(model_run))
 
 # import base model run (used for the one-time visualisations below)
@@ -2537,8 +2607,8 @@ regions = solution.region.values
 commodities = solution.commodity.values
 
 ### define the sweeping lists for e.g. relationship factor, dependency constraints, and country selection ###
-rfm_sweep = [1, 1.2, 1.5, 1.8, 2]
-countries_of_interest = ["EU-DEU", "AS-KOR", "AS-TUR", "AF-EGY", "AF-NGA", "SA-BRA", "AF-ZAF", "AS-TWN"] # "AS-CHN",
+rfm_sweep = [1, 1.05, 1.1, 1.15, 1.2, 1.25, 1.5, 1.75, 2.0] #[1, 1.25, 1.5, 1.75, 2]
+countries_of_interest = ["EU-DEU", "AS-TUR", "SA-BRA"] # "AS-CHN", "AS-KOR", "AF-EGY", "AF-NGA", "AF-ZAF", "AS-TWN"
 
 #%%
 # =============================================================================
@@ -2667,6 +2737,7 @@ rfm_sweep_results_df = load_market_results_in_df(rfm_sweep_runs, rfm_sweep)
 rfm_hhi_df = pd.DataFrame(rfm_hhi_records)
 # plot_hhi_vs_rfm(rfm_hhi_df)
 macro_df = compute_macro_metrics(rfm_sweep_runs)
+plot_macro_sensitivity_condensed(macro_df, output_path)
 plot_macro_sensitivity(macro_df, rfm_hhi_df, output_path)
 
 plot_rfm_sens_selec_country(rfm_sweep_results_df, rfm_sweep_runs)

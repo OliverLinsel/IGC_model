@@ -5,6 +5,8 @@ import time
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
+from scipy.stats import gaussian_kde
 #%%
  
 # ------------------------------------------------------------------------------
@@ -128,50 +130,235 @@ def build_relationship_base(case_study: str = "h2bb") -> dict:
  
     return {"base_df": base_df, "country_df": country_df, "geometry_helper": geometry_helper}
  
-def calculate_relationship_factor(base, target_max_multiplier:1.5, scenario="Base") -> pd.DataFrame:
+def calculate_relationship_factor(base, relationship_factor_magnitude: float, scenario="Base") -> pd.DataFrame:
     """
-    Compute the relationship-factor / vom_multiplier table at a given ceiling.
- 
-        vom_multiplier_ij = exp(gamma * (1 - alliance_index_ij))
-        gamma = ln(target_max_multiplier)
- 
-    so vom_multiplier is exactly 1 for the best-connected pair and exactly
-    target_max_multiplier for a pair sharing no alliance at all. Pairs flagged
-    `at_war` are overridden to inf (infeasible route) regardless of alliance_index
-    -- treated as a hard constraint rather than folded into the alliance curve,
-    so trading_module.py can filter those out (`rel_df.vom_multiplier < np.inf`)
-    rather than mistaking a war override for a legitimately weak alliance score.
- 
+    Compute the relationship-factor / vom_multiplier table at a given rfm ceiling.
+
+        vom_multiplier_ij = relationship_factor_magnitude ** (1 - alliance_index_ij)
+
+    so vom_multiplier is exactly 1 for the best-connected pair (alliance_index = 1,
+    exponent = 0) and exactly relationship_factor_magnitude (rfm) for a pair
+    sharing no alliance at all (alliance_index = 0, exponent = 1) -- interpolating
+    smoothly on a power curve in between. This is the single, final scaling
+    applied to transport costs downstream (trading_module.py consumes
+    vom_multiplier directly, with no further rfm scaling applied there) -- so
+    rfm should be swept here, at this layer, and nowhere else.
+
+    Pairs flagged `at_war` are overridden to inf (infeasible route) regardless
+    of alliance_index -- treated as a hard constraint rather than folded into
+    the alliance curve, so trading_module.py can filter those out
+    (`rel_df.vom_multiplier < np.inf`) rather than mistaking a war override
+    for a legitimately weak alliance score.
+
     Parameters
     ----------
     base : dict (as returned by build_relationship_base()) or the base_df itself
-    target_max_multiplier : float
-        Must be > 1. This is the parameter to sweep in the sensitivity analysis.
- 
+    relationship_factor_magnitude : float
+        The rfm sensitivity parameter. Must be > 1. This is the single
+        parameter to sweep in the sensitivity analysis -- it is not
+        reapplied anywhere downstream.
+
     Returns
     -------
-    DataFrame[country, friends, counter, shared_weight, alliance_index, at_war,
-              gamma, vom_multiplier, continent, pairing], sorted by vom_multiplier.
+    DataFrame[region1, region2, counter, shared_weight, alliance_index,
+              vom_multiplier, scenario], sorted by vom_multiplier.
     """
-    if target_max_multiplier < 1:
-        raise ValueError(f"target_max_multiplier must be > 1, got {target_max_multiplier}")
- 
+    if relationship_factor_magnitude < 1:
+        raise ValueError(f"relationship_factor_magnitude must be > 1, got {relationship_factor_magnitude}")
+
     base_df = base["base_df"] if isinstance(base, dict) else base
     rel_df = base_df.copy()
- 
-    gamma = np.log(target_max_multiplier)
-    rel_df["gamma"] = gamma
-    rel_df["vom_multiplier"] = np.exp(gamma * (1 - rel_df["alliance_index"]))
+
+    rel_df["vom_multiplier"] = relationship_factor_magnitude ** (1 - rel_df["alliance_index"])
     rel_df.loc[rel_df["at_war"] == 1, "vom_multiplier"] = 10
- 
+
     rel_df["continent"] = rel_df["country"].str.split("-").str[0]
     rel_df["pairing"] = rel_df["country"] + " - " + rel_df["friends"]
 
     rel_df["scenario"] = scenario
     rel_df = rel_df.sort_values("vom_multiplier").reset_index(drop=True)
-    rel_df = rel_df.rename(columns={"country":"region1", "friends":"region2"})
-    rel_df = rel_df.drop(columns={"at_war", "continent", "pairing"}) 
+    rel_df = rel_df.rename(columns={"country": "region1", "friends": "region2"})
+    rel_df = rel_df.drop(columns={"at_war", "continent", "pairing"})
     return rel_df
+
+def relationship_visualisation(base, rfm_sweep_list, case_study, output_path=None):
+    """Visualise how vom_multiplier responds to alliance_index across different
+    relationship_factor_magnitude (rfm) sweep values — shows the underlying
+    transformation curve, with each region-pair as a point along it."""
+    FONT_FAMILY = "Times New Roman"
+    FONT_COLOR = "black"
+
+    if output_path is None:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        output_path = os.path.join(script_dir, "output")
+
+    # --- compute rel_df for every rfm value in the sweep ---
+    rfm_dfs = []
+    for rfm in rfm_sweep_list:
+        df = calculate_relationship_factor(base, relationship_factor_magnitude=rfm)
+        df = df.copy()
+        df["rfm"] = rfm
+        rfm_dfs.append(df)
+    combined_df = pd.concat(rfm_dfs, ignore_index=True)
+
+    # --- simple fixed palette, one color per rfm value ---
+    rfm_values = sorted(combined_df["rfm"].unique())
+    palette = [
+        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+        "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+    ]
+    color_map = {rfm: palette[i % len(palette)] for i, rfm in enumerate(rfm_values)}
+
+    fig = go.Figure()
+
+    for rfm in rfm_values:
+        sub = combined_df[combined_df["rfm"] == rfm].sort_values("alliance_index")
+        fig.add_trace(go.Scatter(
+            x=sub["alliance_index"], y=sub["vom_multiplier"],
+            mode="markers",
+            marker=dict(size=6, color=color_map[rfm], opacity=0.6,
+                         line=dict(width=0.5, color=color_map[rfm])),
+            name=f"rfm = {rfm}",
+            hovertemplate=(
+                sub["region1"].astype(str) + " – " + sub["region2"].astype(str)
+                + "<br>Alliance index: %{x:.3f}<br>VOM multiplier: %{y:.3f}"
+                + f"<br>rfm: {rfm}<extra></extra>"
+            ),
+        ))
+
+    fig.update_layout(
+        title=dict(
+            text=f"Relationship factor sensitivity — VOM multiplier vs. alliance index ({case_study})",
+            font=dict(family=FONT_FAMILY, size=18, color=FONT_COLOR),
+        ),
+        xaxis=dict(
+            title=dict(text="Alliance index", font=dict(family=FONT_FAMILY, size=14, color=FONT_COLOR)),
+            tickfont=dict(family=FONT_FAMILY, size=12, color=FONT_COLOR),
+            showgrid=True, gridcolor="lightgrey",
+            range=[0, 1],
+        ),
+        yaxis=dict(
+            title=dict(text="VOM multiplier", font=dict(family=FONT_FAMILY, size=14, color=FONT_COLOR)),
+            tickfont=dict(family=FONT_FAMILY, size=12, color=FONT_COLOR),
+            showgrid=True, gridcolor="lightgrey",
+            range=[0, 2],
+        ),
+        legend=dict(title=dict(text="Sensitivity run"), font=dict(family=FONT_FAMILY, size=12, color=FONT_COLOR)),
+        font=dict(family=FONT_FAMILY, color=FONT_COLOR),
+        plot_bgcolor="white", paper_bgcolor="white",
+        width=1200, height=800,
+    )
+
+    os.makedirs(os.path.join(output_path, "figures"), exist_ok=True)
+    fig.write_image(os.path.join(output_path, "figures", f"relationship_vom_multiplier_sens_{case_study}.png"), scale=4)
+    fig.write_html(os.path.join(output_path, "figures", f"relationship_vom_multiplier_sens_{case_study}.html"), include_plotlyjs="cdn")
+
+    return fig, combined_df
+
+def relationship_distribution_visualisation(base, rfm_sweep_list, case_study, output_path=None, n_points=300):
+    """Overlaid count distributions of vom_multiplier across region pairs, one
+    curve per rfm sweep value, all sharing the same x and y axis --
+    differentiated only by color."""
+    FONT_FAMILY = "Times New Roman"
+    FONT_COLOR = "black"
+
+    if output_path is None:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        output_path = os.path.join(script_dir, "output")
+
+    rfm_dfs = []
+    for rfm in rfm_sweep_list:
+        df = calculate_relationship_factor(base, relationship_factor_magnitude=rfm)
+        df = df.copy()
+        df["rfm"] = rfm
+        rfm_dfs.append(df)
+    combined_df = pd.concat(rfm_dfs, ignore_index=True)
+
+    plot_df = combined_df[combined_df["vom_multiplier"] < 10].copy()
+
+    rfm_values = sorted(plot_df["rfm"].unique())
+    palette = ["#1b9e77", "#d95f02", "#7570b3", "#e7298a", "#66a61e", "#e6ab02", "#a6761d"]
+    color_map = {rfm: palette[i % len(palette)] for i, rfm in enumerate(rfm_values)}
+
+    # shared x-range across all curves
+    x_min = plot_df["vom_multiplier"].min()
+    x_max = plot_df["vom_multiplier"].max()
+    x_grid = np.linspace(x_min, x_max, n_points)
+
+    fig = go.Figure()
+
+    for rfm in rfm_values:
+        sub = plot_df[plot_df["rfm"] == rfm]
+        n_points_in_subset = len(sub)
+
+        # Check if data has sufficient variance
+        if n_points_in_subset < 2 or np.var(sub["vom_multiplier"]) < 1e-10:
+            # Plot a vertical line at the constant value
+            fig.add_trace(go.Scatter(
+                x=[sub["vom_multiplier"].iloc[0]] * 2,
+                y=[0, n_points_in_subset],  # Use actual count for constant case
+                mode="lines",
+                line=dict(color=color_map[rfm], width=2, dash="dot"),
+                name=f"rfm = {rfm} (constant)",
+                hovertemplate=f"rfm = {rfm}<br>Constant VOM multiplier: {sub['vom_multiplier'].iloc[0]:.3f}<br>Count: {n_points_in_subset}<extra></extra>",
+            ))
+            continue
+
+        try:
+            kde = gaussian_kde(sub["vom_multiplier"])
+            density = kde(x_grid)
+            # Convert density to counts by multiplying by number of points and bin width
+            bin_width = (x_max - x_min) / n_points
+            counts = density * n_points_in_subset * bin_width
+
+            fig.add_trace(go.Scatter(
+                x=x_grid, y=counts,
+                mode="lines",
+                fill="tozeroy",
+                line=dict(color=color_map[rfm], width=2),
+                fillcolor=color_map[rfm].replace(")", ", 0.25)").replace("rgb", "rgba")
+                            if color_map[rfm].startswith("rgb") else color_map[rfm],
+                opacity=0.6,
+                name=f"rfm = {rfm}",
+                hovertemplate=f"rfm = {rfm}<br>VOM multiplier: %{{x:.3f}}<br>Count: %{{y:.0f}}<extra></extra>",
+            ))
+        except np.linalg.LinAlgError:
+            # Fallback if KDE fails
+            fig.add_trace(go.Scatter(
+                x=[sub["vom_multiplier"].mean()] * 2,
+                y=[0, n_points_in_subset],
+                mode="lines",
+                line=dict(color=color_map[rfm], width=2, dash="dot"),
+                name=f"rfm = {rfm} (error)",
+                hovertemplate=f"rfm = {rfm}<br>Mean VOM multiplier: {sub['vom_multiplier'].mean():.3f}<br>Count: {n_points_in_subset}<extra></extra>",
+            ))
+
+    fig.update_layout(
+        title=dict(
+            text=f"Count Distribution of VOM multipliers across region pairs, by rfm ({case_study})",
+            font=dict(family=FONT_FAMILY, size=18, color=FONT_COLOR),
+        ),
+        xaxis=dict(
+            title=dict(text="VOM multiplier", font=dict(family=FONT_FAMILY, size=14, color=FONT_COLOR)),
+            tickfont=dict(family=FONT_FAMILY, size=12, color=FONT_COLOR),
+            showgrid=True, gridcolor="lightgrey",
+        ),
+        yaxis=dict(
+            title=dict(text="Number of relationships", font=dict(family=FONT_FAMILY, size=14, color=FONT_COLOR)),
+            tickfont=dict(family=FONT_FAMILY, size=12, color=FONT_COLOR),
+            showgrid=True, gridcolor="lightgrey",
+        ),
+        legend=dict(title=dict(text="Sensitivity run"), font=dict(family=FONT_FAMILY, size=12, color=FONT_COLOR)),
+        font=dict(family=FONT_FAMILY, color=FONT_COLOR),
+        plot_bgcolor="white", paper_bgcolor="white",
+        width=1200, height=800,
+    )
+
+    os.makedirs(os.path.join(output_path, "figures"), exist_ok=True)
+    fig.write_image(os.path.join(output_path, "figures", f"relationship_vom_multiplier_counts_{case_study}.png"), scale=4)
+    fig.write_html(os.path.join(output_path, "figures", f"relationship_vom_multiplier_counts_{case_study}.html"), include_plotlyjs="cdn")
+
+    return fig, combined_df
 
 # ------------------------------------------------------------------------------
 # Standalone execution: reproduces the original script's behaviour at a single
@@ -181,13 +368,14 @@ def calculate_relationship_factor(base, target_max_multiplier:1.5, scenario="Bas
 
 if __name__ == "__main__":
     START = time.perf_counter()
- 
+
     case_study = "h2bb"
-    DEFAULT_TARGET_MAX_MULTIPLIER = 1.5
- 
+    relationship_factor_magnitude = 1.5
+    relationship_factor_magnitude_sens_list = [1, 1.2, 1.5, 1.8, 2]
+
     base = build_relationship_base(case_study=case_study)
-    rel_df = calculate_relationship_factor(base, target_max_multiplier=DEFAULT_TARGET_MAX_MULTIPLIER)
- 
+    rel_df = calculate_relationship_factor(base, relationship_factor_magnitude=relationship_factor_magnitude)
+
     script_dir = os.path.dirname(os.path.abspath(__file__))
     data_path = os.path.join(script_dir, "data")
     os.makedirs(os.path.join(data_path, case_study), exist_ok=True)
@@ -196,7 +384,13 @@ if __name__ == "__main__":
         sheet_name="relations",
         index=False,
     )
- 
+
+    print("Plotting relationship sensitivity")
+    relationship_visualisation(base, relationship_factor_magnitude_sens_list, case_study)
+
+    print("Plotting relationship distribution")
+    relationship_distribution_visualisation(base, relationship_factor_magnitude_sens_list, case_study)
+
     STOP = time.perf_counter()
     print("Total execution time of script", round((STOP - START), 1), "s")
 #%%

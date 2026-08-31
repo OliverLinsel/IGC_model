@@ -153,7 +153,7 @@ def load_relationship_factors(data_path, case_study, target_max_multiplier=1.5):
     try:
         from relationship_module import build_relationship_base, calculate_relationship_factor
         base = build_relationship_base(case_study=case_study)
-        relationship_df = calculate_relationship_factor(base, target_max_multiplier=target_max_multiplier)
+        relationship_df = calculate_relationship_factor(base, relationship_factor_magnitude=target_max_multiplier)
         used_static_fallback = False
 
     except (ImportError, ModuleNotFoundError, FileNotFoundError) as e:
@@ -331,7 +331,7 @@ data = data_new.fillna(0)
 
 ### Remove NaNs ###
 data_1D = data_1D.fillna(0)
-data_2D = data_2D.fillna({"transport_cost": 0, "counter": 0, "shared_weight":0, "alliance_index":0, "gamma":0, "vom_multiplier": 0, "transport_efficiency":0})
+data_2D = data_2D.fillna({"transport_cost": 0, "counter": 0, "shared_weight":0, "alliance_index":0, "vom_multiplier": 0, "transport_efficiency":0})
 
 for v in data_2D.data_vars:
     n_missing = np.isnan(data_2D[v]).sum()
@@ -510,24 +510,46 @@ def build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, max_tota
         + v_unmet
         == demand_xr["demand"],
         name="c_balance")
-    
-    ### Objective ###
-    production_costs = (v_supply_segment * segment_price
-                        ).sum() #dim= explizit definieren manchmal praktisch für Lösung
 
-    effective_multiplier = 1 + rfm * (data_2D["vom_multiplier"] - 1)
-    print(effective_multiplier)
-    transport_costs = (v_transport * data_2D["transport_cost"] * effective_multiplier).sum()
+    print(data_2D["vom_multiplier"])
+    ### Objective ###
+
+    ### Objective ###
+    # domestically-retained supply, per region/commodity/scenario/supply_step
+    # (>= 0 guaranteed by c_export_link: exports_by_step <= v_supply_segment)
+    domestic_retained = v_supply_segment - exports_by_step
+
+    # price at the ORIGIN region, aligned onto v_transport's region1 dimension,
+    # so it lines up with v_transport's existing (region1, region2, commodity,
+    # scenario, supply_step) coordinates
+    price_by_region1 = segment_price.rename(region="region1")
+
+    # domestic (retained) production costs at the plain segment price
+    production_costs_domestic = (domestic_retained * segment_price).sum()
+
+    # traded goods carry the vom_multiplier on their SUPPLY cost, reflecting
+    # relationship risk on the commodity itself rather than on shipping
+    trade_supply_costs = (v_transport * price_by_region1 * data_2D["vom_multiplier"]).sum()
+
+    # transport costs stay unmultiplied, as before but without vom_multiplier
+    transport_costs = (v_transport * data_2D["transport_cost"]).sum()
 
     penalty_costs = (v_unmet * 100000).sum()
 
     ### Objective Function ###
     obj_fun = model.add_objective(
-        production_costs + transport_costs + penalty_costs, sense="min")
+        production_costs_domestic + trade_supply_costs + transport_costs + penalty_costs, sense="min")
 
     ### Solve ###
     model.solve(solver_name="gurobi")
     solution = model.solution
+
+    print("Testprint" + "\n")
+    check = solution["v_supply_segment"] - solution["v_transport"].sum("region2").rename(region1="region")
+    print("min:", check.min().item())
+
+    violations = check.where(check < -1e-6, drop=True)
+    print(violations)
 
     if solution is not None:
         print("Solution found")
@@ -550,26 +572,26 @@ def build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, max_tota
         print("No solution available")
     return model, solution
 
-# model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, 0.75, 0.2, 1)
+model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, 0.8, 0.2, 1)
 
-rfm_filler = 2
-total_dep_list = [0, 0.2, 0.4, 0.6, 0.8, 1]
-indiv_dep_list = [0, 0.2, 0.4, 0.6, 0.8, 1]
-
-# Execute sensitivity analysis for dependency parameters
-for t_d in total_dep_list:
-    for i_d in indiv_dep_list:
-        print("Execute optimization for dependency parameters: " + str(t_d) + "_" + str(i_d))
-        model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, t_d, i_d, rfm_filler)
-        print("Optimization successfull")
-
-# relationship_factor_magnitude = [1, 1.2, 1.5, 1.8, 2.0]
+# rfm_filler = 1
+# total_dep_list = [0, 0.25, 0.5, 0.75, 1]
+# indiv_dep_list = [0, 0.25, 0.5, 0.75, 1]
 
 # # Execute sensitivity analysis for dependency parameters
-# for rfm in relationship_factor_magnitude:
-#     print("Execute optimization for relationship magnitude: " + str(rfm))
-#     model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, 0.8, 0.2, rfm)
-#     print("Optimization successfull")
+# for t_d in total_dep_list:
+#     for i_d in indiv_dep_list:
+#         print("Execute optimization for dependency parameters: " + str(t_d) + "_" + str(i_d))
+#         model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, t_d, i_d, rfm_filler)
+#         print("Optimization successfull")
+
+relationship_factor_magnitude = [1, 1.05, 1.1, 1.15, 1.2, 1.25, 1.5, 1.75, 2.0]
+
+# Execute sensitivity analysis for dependency parameters
+for rfm in relationship_factor_magnitude:
+    print("Execute optimization for relationship magnitude: " + str(rfm))
+    model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, 0.8, 0.2, rfm)
+    print("Optimization successfull")
 
 # ==========================
 # Extract shadow prices
