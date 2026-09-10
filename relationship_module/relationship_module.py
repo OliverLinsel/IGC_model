@@ -119,15 +119,17 @@ def build_relationship_base(case_study: str = "h2bb") -> dict:
         enemy_pairs["country"], enemy_pairs["friends"] = sorted_enemy[:, 0], sorted_enemy[:, 1]
         enemy_pairs = enemy_pairs.drop_duplicates()
         enemy_pairs["at_war"] = 1
- 
-        base_df = base_df.merge(enemy_pairs, on=["country", "friends"], how="left")
+        enemy_pairs_mirrored = enemy_pairs.rename(columns={"country": "friends", "friends": "country"})
+        enemy_pairs_full = pd.concat([enemy_pairs, enemy_pairs_mirrored], ignore_index=True).drop_duplicates()
+
+        base_df = base_df.merge(enemy_pairs_full, on=["country", "friends"], how="left")
         base_df["at_war"] = base_df["at_war"].fillna(0).astype(int)
     else:
         base_df["at_war"] = 0
         print("No 'enemies' data found on the countries sheet -- war override will be a no-op.")
 
     geometry_helper = country_df[["country", "lon", "lat", "geometry"]]
- 
+
     return {"base_df": base_df, "country_df": country_df, "geometry_helper": geometry_helper}
  
 def calculate_relationship_factor(base, relationship_factor_magnitude: float, scenario="Base") -> pd.DataFrame:
@@ -182,9 +184,6 @@ def calculate_relationship_factor(base, relationship_factor_magnitude: float, sc
     return rel_df
 
 def relationship_visualisation(base, rfm_sweep_list, case_study, output_path=None):
-    """Visualise how vom_multiplier responds to alliance_index across different
-    relationship_factor_magnitude (rfm) sweep values — shows the underlying
-    transformation curve, with each region-pair as a point along it."""
     FONT_FAMILY = "Times New Roman"
     FONT_COLOR = "black"
 
@@ -201,13 +200,13 @@ def relationship_visualisation(base, rfm_sweep_list, case_study, output_path=Non
         rfm_dfs.append(df)
     combined_df = pd.concat(rfm_dfs, ignore_index=True)
 
-    # --- simple fixed palette, one color per rfm value ---
+    # --- rainbow palette, one color per rfm value ---
     rfm_values = sorted(combined_df["rfm"].unique())
-    palette = [
-        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
-        "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+    rainbow_palette = [
+        '#ff0000', '#ff7f00', '#ffff00', '#7fff00', '#00ff00',
+        '#00ff7f', '#00ffff', '#007fff', '#0000ff', '#7f00ff'
     ]
-    color_map = {rfm: palette[i % len(palette)] for i, rfm in enumerate(rfm_values)}
+    color_map = {rfm: rainbow_palette[i % len(rainbow_palette)] for i, rfm in enumerate(rfm_values)}
 
     fig = go.Figure()
 
@@ -216,8 +215,8 @@ def relationship_visualisation(base, rfm_sweep_list, case_study, output_path=Non
         fig.add_trace(go.Scatter(
             x=sub["alliance_index"], y=sub["vom_multiplier"],
             mode="markers",
-            marker=dict(size=6, color=color_map[rfm], opacity=0.6,
-                         line=dict(width=0.5, color=color_map[rfm])),
+            marker=dict(size=6, color=color_map[rfm], opacity=1.0,
+                         line=dict(width=1, color=color_map[rfm])),
             name=f"rfm = {rfm}",
             hovertemplate=(
                 sub["region1"].astype(str) + " – " + sub["region2"].astype(str)
@@ -241,7 +240,7 @@ def relationship_visualisation(base, rfm_sweep_list, case_study, output_path=Non
             title=dict(text="VOM multiplier", font=dict(family=FONT_FAMILY, size=14, color=FONT_COLOR)),
             tickfont=dict(family=FONT_FAMILY, size=12, color=FONT_COLOR),
             showgrid=True, gridcolor="lightgrey",
-            range=[0, 2],
+            range=[0, 2],  # Already showing only positive y-axis
         ),
         legend=dict(title=dict(text="Sensitivity run"), font=dict(family=FONT_FAMILY, size=12, color=FONT_COLOR)),
         font=dict(family=FONT_FAMILY, color=FONT_COLOR),
@@ -256,9 +255,6 @@ def relationship_visualisation(base, rfm_sweep_list, case_study, output_path=Non
     return fig, combined_df
 
 def relationship_distribution_visualisation(base, rfm_sweep_list, case_study, output_path=None, n_points=300):
-    """Overlaid count distributions of vom_multiplier across region pairs, one
-    curve per rfm sweep value, all sharing the same x and y axis --
-    differentiated only by color."""
     FONT_FAMILY = "Times New Roman"
     FONT_COLOR = "black"
 
@@ -371,7 +367,7 @@ if __name__ == "__main__":
 
     case_study = "h2bb"
     relationship_factor_magnitude = 1.5
-    relationship_factor_magnitude_sens_list = [1, 1.2, 1.5, 1.8, 2]
+    relationship_factor_magnitude_sens_list = [1, 1.05, 1.1, 1.15, 1.2, 1.25, 1.5, 1.75, 2.0]
 
     base = build_relationship_base(case_study=case_study)
     rel_df = calculate_relationship_factor(base, relationship_factor_magnitude=relationship_factor_magnitude)

@@ -574,16 +574,18 @@ def build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, max_tota
 
 model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, 0.8, 0.2, 1)
 
-# rfm_filler = 1
-# total_dep_list = [0, 0.25, 0.5, 0.75, 1]
-# indiv_dep_list = [0, 0.25, 0.5, 0.75, 1]
+#%%
 
-# # Execute sensitivity analysis for dependency parameters
-# for t_d in total_dep_list:
-#     for i_d in indiv_dep_list:
-#         print("Execute optimization for dependency parameters: " + str(t_d) + "_" + str(i_d))
-#         model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, t_d, i_d, rfm_filler)
-#         print("Optimization successfull")
+rfm_filler = 1.5
+total_dep_list = [0, 0.25, 0.5, 0.75, 1]
+indiv_dep_list = [0, 0.25, 0.5, 0.75, 1]
+
+# Execute sensitivity analysis for dependency parameters
+for t_d in total_dep_list:
+    for i_d in indiv_dep_list:
+        print("Execute optimization for dependency parameters: " + str(t_d) + "_" + str(i_d))
+        model, solution = build_and_run_opt_model(data_1D, data_2D, demand_xr, segment_price, t_d, i_d, rfm_filler)
+        print("Optimization successfull")
 
 relationship_factor_magnitude = [1, 1.05, 1.1, 1.15, 1.2, 1.25, 1.5, 1.75, 2.0]
 
