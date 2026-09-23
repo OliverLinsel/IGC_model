@@ -1,0 +1,4 @@
+*.xlsx
+
+!country_relations.xlsx
+!relationship_analysis_output.xlsx

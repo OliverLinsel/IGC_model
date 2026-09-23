@@ -116,3 +116,5 @@ visualize_sources(test_sources_o, case_study)
 
 STOP = time.perf_counter()
 print('Total execution time of script',round((STOP-START), 1), 's')
+
+## AI statement: During the preparation of this work the author(s) used Claude in order to develop software tools used in this pubication. After using this tool/service, the authors reviewed and edited the content as needed and take full responsibility for the content of the published article.

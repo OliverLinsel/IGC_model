@@ -84,3 +84,5 @@ if __name__ == "__main__":
 # parent_dir = os.path.dirname(script_dir)
 # sys.path.append(parent_dir)
 # from model_settings import get_settings
+
+## AI statement: During the preparation of this work the author(s) used Claude in order to develop software tools used in this pubication. After using this tool/service, the authors reviewed and edited the content as needed and take full responsibility for the content of the published article.

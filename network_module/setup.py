@@ -33,3 +33,5 @@ def get_ram_usage(iteration):
     print(f"Iteration {iteration + 1}: RAM usage is {ram_usage_mb:.2f} MB ({ram_usage_percentage:.2f}% of total memory)")
     # Return the RAM usage values if needed for further processing
     return
+
+## AI statement: During the preparation of this work the author(s) used Claude in order to develop software tools used in this pubication. After using this tool/service, the authors reviewed and edited the content as needed and take full responsibility for the content of the published article.
