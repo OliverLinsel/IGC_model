@@ -13,20 +13,34 @@ START = time.perf_counter()
 print("Execute in Directory:")
 print(os.getcwd() + "\n")
 
-try:
-    module_dir = os.path.dirname(os.path.abspath(__file__))
-except NameError:
-    module_dir = os.getcwd()
+### This part is to guarantee execution in normal and in debug mode to cleanly call scripts from neighbouring directories
+def _find_project_root(start_dir, required_siblings=("econ_module", "relationship_module", "general_module")):
+    candidate = os.path.abspath(start_dir)
+    for _ in range(6):
+        if all(os.path.isdir(os.path.join(candidate, s)) for s in required_siblings):
+            return candidate
+        parent = os.path.dirname(candidate)
+        if parent == candidate:
+            break
+        candidate = parent
+    raise RuntimeError(f"Could not locate IGC_model project root (expected {required_siblings}) starting from {start_dir}")
 
-module_dir = os.getcwd()
-input_path = os.path.join(module_dir, "input_data")
+try:
+    _start_dir = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    _start_dir = os.getcwd()
+
+project_root = _find_project_root(_start_dir)
+module_dir = os.path.join(project_root, "plant_design_module")
+input_path = os.path.join(module_dir, "input")
 output_path = os.path.join(module_dir, "output")
 
 # --- global parameters (step 8 discussion: to be moved to a config/other module later) ---
 TARGET_UNIT = "MW"
 TARGET_CAPACITY_MW = 1.0
 TARGET_CURRENCY = "EUR"  # alias: €
-TARGET_YEAR = 2026
+TARGET_YEAR = 2040
+DEFAULT_DEGRESSION_EXPONENT = 0.7 # used only when a record gives no degression_exponent; an assumption, flagged in warnings.
 
 # derived target compound units used throughout the pipeline
 TARGET_ENERGY_UNIT = f"{TARGET_UNIT}h"                    # e.g. "MWh"
@@ -80,6 +94,37 @@ BASE_SYMBOL_TO_CANONICAL = {
     "time": {"h": 1.0, "yr": 8760.0},                # canonical base: h (non-leap year)
 }
 
+# ---------------------------------------------------------------------------
+# Assigning units for export
+# ---------------------------------------------------------------------------
+
+LIFETIME_UNIT = "yr"
+FULL_LOAD_HOURS_UNIT = "h/yr"
+FOM_FACTOR_UNIT = "1/yr"
+ENERGY_RATIO_UNIT = f"{TARGET_ENERGY_UNIT}/{TARGET_ENERGY_UNIT}_out"
+
+# unit shown next to each column in the step 9 sheet "techno_economic_data"
+FIELD_UNITS = {
+    "capex": TARGET_CAPEX_UNIT, "capex_scale_base": TARGET_UNIT,
+    "fom_factor": FOM_FACTOR_UNIT, "fom": f"{TARGET_CAPEX_UNIT}/yr", "vom": TARGET_VOM_UNIT,
+    "lifetime_years": LIFETIME_UNIT, "full_load_hours": FULL_LOAD_HOURS_UNIT,
+    "efficiency_energetic": "-", "efficiency_material": "-",
+    "energy_losses": ENERGY_RATIO_UNIT,
+}
+EFFICIENCY_COLUMNS = ["efficiency_energetic", "energy_losses", "efficiency_material"]
+
+UNIT_COLUMN_NAMES = {"lifetime_years": "lifetime_unit"}   # default name is <column>_unit
+
+# unit shown next to each column in the step 10 sheet "model_input"
+MODEL_INPUT_UNITS = {
+    "invest_cost": TARGET_CAPEX_UNIT, "full_load_hours": FULL_LOAD_HOURS_UNIT,
+    "lifetime": LIFETIME_UNIT, "efficiency_material": "-", "efficiency_energetic": "-",
+    "fom_factor": FOM_FACTOR_UNIT, "electricity_consumption": f"{TARGET_ENERGY_UNIT}_el/{TARGET_ENERGY_UNIT}_out",
+}
+
+# ---------------------------------------------------------------------------
+# Helping functions for data handling
+# ---------------------------------------------------------------------------
 
 def decompose_token(token: str) -> tuple[str, str, float]:
     """One unit token (e.g. 'MWh') -> (category, base_symbol, metric_prefix_factor).
@@ -119,6 +164,9 @@ def split_compound_unit(unit_str: str) -> tuple[list[str], list[str]]:
         denominator.extend(p.split("*"))
     return numerator, denominator
 
+# ---------------------------------------------------------------------------
+# Function definitions
+# ---------------------------------------------------------------------------
 
 def unit_unifying(target_unit: str = "EUR/MWh", input_unit: Optional[str] = None,
                    input_value: Optional[float] = None,
@@ -257,6 +305,12 @@ class Technology:
     lifetime_years: Optional[float] = None
     wacc: Optional[float] = None
     fom_factor: Optional[float] = None
+    # populated by step 7 (FOM)
+    fom: Optional[float] = None          # EUR/MW/yr, based on final capex
+    fom_unit: Optional[str] = None
+    # populated by step 7b (commodity cost)
+    # commodity_cost: Optional[float] = None       # EUR/MWh_out, inputs only
+    # commodity_cost_note: Optional[str] = None
     vom: Optional[float] = None
     vom_unit: Optional[str] = None
     full_load_hours: Optional[float] = None
@@ -299,75 +353,70 @@ class Technology:
         """
         # capture the *original* capex_unit before it gets overwritten below -
         # capex_scale_base's implicit unit is this unit's denominator
-        original_capex_unit = self.capex_unit
+        original_capex_unit = self.capex_unit # capex_scale_base's implicit unit is its denominator
 
-        fx_rate = None
-        if self.capex_ref_year is not None:
-            fx_rate = get_fx_rate(fx_rates_df, self.capex_ref_year)
+        fx_rate = get_fx_rate(fx_rates_df, self.capex_ref_year) if self.capex_ref_year is not None else None
 
         # --- CAPEX ---
-        if self.capex is not None and self.capex_unit is not None:
+        if self.capex is None:
+            self._missing("capex not provided.")
+        elif self.capex_unit is None:
+            self._fail("capex given without capex_unit.", "capex")
+        else:
             try:
                 self.capex, self.capex_unit = unit_unifying(
-                    target_unit=TARGET_CAPEX_UNIT,
-                    input_unit=self.capex_unit,
-                    input_value=self.capex,
-                    fx_rate_usd_per_eur=fx_rate,
-                )
+                    target_unit=TARGET_CAPEX_UNIT, input_unit=self.capex_unit,
+                    input_value=self.capex, fx_rate_usd_per_eur=fx_rate)
             except ValueError as e:
-                self.warnings.append(
-                    f"unify_units: could not convert capex ({original_capex_unit} -> {TARGET_CAPEX_UNIT}): {e}"
-                )
-        else:
-            self.warnings.append("unify_units: capex or capex_unit missing, capex not converted.")
+                self._fail(f"capex ({original_capex_unit} -> {TARGET_CAPEX_UNIT}): {e}", "capex", "capex_unit")
 
-        # --- capex_scale_base: same capacity unit as capex_unit's original denominator ---
-        if self.capex_scale_base is not None and original_capex_unit is not None:
+        # --- capex_scale_base ---
+        if self.capex_scale_base is None:
+            self._missing("capex_scale_base not provided.")
+        elif original_capex_unit is None:
+            self._fail("capex_scale_base given without capex_unit.", "capex_scale_base")
+        else:
             _, capacity_tokens = split_compound_unit(original_capex_unit)
-            if len(capacity_tokens) == 1:
+            if len(capacity_tokens) != 1:
+                self._fail(f"capex_unit '{original_capex_unit}' has {len(capacity_tokens)} "
+                        f"denominator tokens, expected 1.", "capex_scale_base")
+            else:
                 try:
                     self.capex_scale_base, _ = unit_unifying(
-                        target_unit=TARGET_UNIT,
-                        input_unit=capacity_tokens[0],
-                        input_value=self.capex_scale_base,
-                    )
+                        target_unit=TARGET_UNIT, input_unit=capacity_tokens[0],
+                        input_value=self.capex_scale_base)
                 except ValueError as e:
-                    self.warnings.append(
-                        f"unify_units: could not convert capex_scale_base ({capacity_tokens[0]} -> {TARGET_UNIT}): {e}"
-                    )
-            else:
-                self.warnings.append(
-                    f"unify_units: capex_unit denominator '{original_capex_unit}' has "
-                    f"{len(capacity_tokens)} tokens, expected exactly 1 - capex_scale_base not converted."
-                )
-        elif self.capex_scale_base is not None:
-            self.warnings.append("unify_units: capex_unit missing, capex_scale_base not converted.")
+                    self._fail(f"capex_scale_base ({capacity_tokens[0]} -> {TARGET_UNIT}): {e}",
+                            "capex_scale_base")
 
         # --- VOM ---
-        if self.vom is not None and self.vom_unit is not None:
+        if self.vom is None:
+            self._missing("vom not provided.")
+        elif self.vom_unit is None:
+            self._fail("vom given without vom_unit.", "vom")
+        else:
+            original_vom_unit = self.vom_unit
             try:
                 self.vom, self.vom_unit = unit_unifying(
-                    target_unit=TARGET_VOM_UNIT,
-                    input_unit=self.vom_unit,
-                    input_value=self.vom,
-                    fx_rate_usd_per_eur=fx_rate,
-                )
+                    target_unit=TARGET_VOM_UNIT, input_unit=self.vom_unit,
+                    input_value=self.vom, fx_rate_usd_per_eur=fx_rate)
             except ValueError as e:
-                self.warnings.append(f"unify_units: could not convert vom ({self.vom_unit} -> {TARGET_VOM_UNIT}): {e}")
-        else:
-            self.warnings.append("unify_units: vom or vom_unit missing, vom not converted.")
+                self._fail(f"vom ({original_vom_unit} -> {TARGET_VOM_UNIT}): {e}", "vom", "vom_unit")
 
     def check_stoichiometry(self, tolerance: float = STOICHIOMETRY_TOLERANCE) -> None:
         """
-        Step 3 (data-quality check, not a conversion): for every reaction row
-        with chemical_formula + stoichiometric_coefficient set, compute the
-        theoretical amount_per_unit_output from the is_stoichiometric_basis
-        row via molar mass ratios, and compare it to the *reported* value.
-        Flags (appends to self.warnings) any participant whose reported value
-        deviates from the theoretical value by more than `tolerance`
-        (fractional, default STOICHIOMETRY_TOLERANCE). Does not modify any
-        values - real-world yield loss is handled separately via
-        compute_efficiency_material()'s material_eff row, not here.
+        Step 3 (data-quality check only - does not modify any values): for
+        every reaction row with chemical_formula + stoichiometric_coefficient
+        set, compute the theoretical amount_per_unit_output from the
+        is_stoichiometric_basis row via molar mass ratios, and compare it to
+        the *reported* value. Flags (self.warnings) any participant whose
+        reported value deviates from the theoretical value by more than
+        `tolerance` (fractional, default STOICHIOMETRY_TOLERANCE).
+
+        If the basis row or a participant row is missing its
+        amount_per_unit_output, this is explicitly flagged (rather than
+        silently skipped) so it's visible that a value needs to be supplied
+        or calculated manually - no value is derived or filled in here.
         The material_eff marker row is excluded (it has no chemical_formula).
         """
         rows = self.efficiencies.loc[self.efficiencies["commodity"] != "material_eff"]
@@ -386,17 +435,29 @@ class Technology:
                 )
             basis = basis_rows.iloc[0]
 
+            if pd.isna(basis["amount_per_unit_output"]):
+                self.warnings.append(
+                    f"check_stoichiometry: reaction '{reaction_id}' basis '{basis['commodity']}' has no "
+                    f"amount_per_unit_output - reaction cannot be validated, please supply a value."
+                )
+                continue
+
             try:
                 basis_molar_mass = molar_mass(basis["chemical_formula"])
             except ValueError as e:
-                self.warnings.append(
-                    f"check_stoichiometry: reaction '{reaction_id}': {e}"
-                )
+                self.warnings.append(f"check_stoichiometry: reaction '{reaction_id}': {e}")
                 continue
 
             for _, participant in group.iterrows():
                 if participant["is_stoichiometric_basis"] == 1:
                     continue  # basis row compared against itself is trivial
+
+                if pd.isna(participant["amount_per_unit_output"]):
+                    self.warnings.append(
+                        f"check_stoichiometry: '{participant['commodity']}' in reaction '{reaction_id}' has no "
+                        f"amount_per_unit_output - cannot validate, please supply or calculate a value manually."
+                    )
+                    continue
 
                 try:
                     participant_molar_mass = molar_mass(participant["chemical_formula"])
@@ -479,6 +540,88 @@ class Technology:
             self.warnings.append("compute_efficiency_material: multiple material_eff rows found, using the first.")
         self.efficiency_material = material_eff_rows.iloc[0]["amount_per_unit_output"]
 
+    def escalate_capex(self, cepci_df: pd.DataFrame) -> None:
+        """Step 5. Fail closed: capex that cannot be moved to TARGET_YEAR becomes None."""
+        if self.capex is None:
+            return  # already flagged upstream
+        if self.capex_ref_year is None:
+            self._fail("capex_ref_year missing, capex cannot be placed in time.", "capex")
+            return
+        if self.capex_ref_year == TARGET_YEAR:
+            return
+        escalated = cepci_escalate(cepci_df, self.capex, self.capex_ref_year, TARGET_YEAR)
+        if escalated is None:
+            self._fail(f"no CEPCI value for {self.capex_ref_year} or {TARGET_YEAR}.", "capex")
+            return
+        self.capex = escalated
+        self.capex_ref_year = TARGET_YEAR
+
+    def scale_capex(self) -> None:
+        """Step 6. capex (EUR/MW) -> total cost -> size_scale() -> EUR/MW at TARGET_CAPACITY_MW.
+        Fail closed: capex that cannot be scaled becomes None."""
+        if self.capex is None:
+            return  # already flagged upstream
+        if self.capex_unit != TARGET_CAPEX_UNIT:
+            self._fail(f"capex_unit is '{self.capex_unit}', expected '{TARGET_CAPEX_UNIT}'.", "capex")
+            return
+        if self.capex_scale_base is None:
+            self._fail("capex_scale_base missing, capex cannot be scaled to the target capacity.", "capex")
+            return
+        if abs(self.capex_scale_base - TARGET_CAPACITY_MW) < 1e-9:
+            return  # already at target capacity, no exponent needed
+
+        d = self.degression_exponent
+        if d is None:
+            d = DEFAULT_DEGRESSION_EXPONENT  # local only, so statistics never contain assumed exponents
+            self.warnings.append(f"[assumed] degression_exponent missing, using default {d}.")
+        try:
+            total_target = size_scale(self.capex * self.capex_scale_base,
+                                      self.capex_scale_base, TARGET_CAPACITY_MW, d)
+        except ValueError as e:
+            self._fail(str(e), "capex")
+            return
+        self.capex = total_target / TARGET_CAPACITY_MW
+        self.capex_scale_base = TARGET_CAPACITY_MW
+
+    def compute_fom(self) -> None:
+        """Step 7: fom = fom_factor * capex (per year), computed per record. Fail closed."""
+        self.fom, self.fom_unit = None, None
+        if self.capex is None:
+            return  # reason already recorded upstream
+        if self.fom_factor is None:
+            self._missing("fom_factor not provided, fom not computed.")
+            return
+        if (self.capex_unit != TARGET_CAPEX_UNIT or self.capex_ref_year != TARGET_YEAR
+                or self.capex_scale_base is None
+                or abs(self.capex_scale_base - TARGET_CAPACITY_MW) > 1e-9):
+            self._fail("capex not in final state (steps 2/5/6 incomplete), fom not computed.")
+            return
+        self.fom = self.fom_factor * self.capex
+        self.fom_unit = f"{TARGET_CAPEX_UNIT}/yr"
+
+    record_id: int = 0                        # row order in the technologies sheet (internal)
+    raw: dict = field(default_factory=dict)   # input values as read, for debugging
+
+    def __post_init__(self):
+        self.raw = {k: v for k, v in vars(self).items()
+                    if k not in ("efficiencies", "warnings", "raw")}
+
+    def _fail(self, msg: str, *fields: str) -> None:
+        """Operation failed: record why and set the affected fields to None (fail closed)."""
+        self.warnings.append(f"[failed] {msg}")
+        for f in fields:
+            setattr(self, f, None)
+
+    def _missing(self, msg: str) -> None:
+        """Input never provided (normal for partial records, not an error)."""
+        self.warnings.append(f"[missing] {msg}")
+
+def check_efficiency_duplicates(commodity_efficiencies_df: pd.DataFrame) -> None:
+    """One efficiency set per tech_id is expected; stop if a row is duplicated."""
+    key = ["tech_id", "commodity", "direction", "flow_type", "reaction_id"]
+    dup = commodity_efficiencies_df[commodity_efficiencies_df.duplicated(subset=key, keep=False)]
+    if not dup.empty:
+        raise ValueError("commodity_efficiencies has duplicated rows:\n" + dup[key].to_string())
 
 def build_technologies(technologies_df: pd.DataFrame,
                         commodity_efficiencies_df: pd.DataFrame) -> list[Technology]:
@@ -511,6 +654,7 @@ def build_technologies(technologies_df: pd.DataFrame,
 
         tech = Technology(
             tech_id=tech_id,
+            record_id=idx,
             tech_name=clean(row.get("tech_name")),
             category=clean(row.get("category")),
             capex=clean(row.get("capex")),
@@ -533,6 +677,110 @@ def build_technologies(technologies_df: pd.DataFrame,
 
     return technologies
 
+# ---------------------------------------------------------------------------
+# Step 8: aggregation across records of the same tech_id
+# ---------------------------------------------------------------------------
+RECORD_FIELDS = ["capex", "fom_factor", "fom", "vom", "lifetime_years",
+                 "wacc", "full_load_hours", "degression_exponent"]
+CARRIED_FIELDS = ["tech_name", "category", "efficiency_energetic", "energy_losses",
+                  "efficiency_material"] #, "commodity_cost", "commodity_cost_note"]
+
+
+def _valid_value(tech: Technology, field_name: str) -> Optional[float]:
+    """Value of a field if it may enter the statistics, else None.
+    Belt and braces on top of fail-closed steps 2-7: capex/fom/vom must also be in
+    their final unit/year/scale, so a leftover value can never be averaged in."""
+    value = getattr(tech, field_name)
+    if value is None or pd.isna(value):
+        return None
+    if field_name in ("capex", "fom") and not (
+            tech.capex_unit == TARGET_CAPEX_UNIT and tech.capex_ref_year == TARGET_YEAR
+            and tech.capex_scale_base is not None
+            and abs(tech.capex_scale_base - TARGET_CAPACITY_MW) < 1e-9):
+        return None
+    if field_name == "vom" and tech.vom_unit != TARGET_VOM_UNIT:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+def aggregate_technologies(technologies: list[Technology]) -> tuple[pd.DataFrame, dict]:
+    """
+    Step 8 (capex-led): the variants are defined by CAPEX only, and every variant is ONE real source
+    record, so all its values (fom_factor, fom, vom, lifetime, ...) stay coherent:
+      <tech_id>_min     record with the lowest capex
+      <tech_id>_max     record with the highest capex
+      <tech_id>_median  record whose capex is closest to the median capex (ties -> lower capex, then record_id)
+    min/max exist only if capex actually differs between records. Records without a valid capex cannot be
+    ranked and are NOT used (listed in the audit). Nothing is interpolated or filled from other records.
+    Fallback: a tech_id with no valid capex in any record still gets a _median row built from its first
+    record (capex empty), so it does not silently disappear from the output.
+    Efficiencies/commodity cost are identical for all records of a tech_id and are carried through once.
+    Returns (aggregated_df, audit_info).
+    """
+    groups: dict[str, list[Technology]] = {}
+    for tech in technologies:
+        groups.setdefault(tech.tech_id, []).append(tech)
+
+    rows, audit = [], {}
+    for tech_id, records in groups.items():
+        ranked = []
+        for r in records:
+            c = _valid_value(r, "capex")
+            if c is not None:
+                ranked.append((c, r.record_id, r))
+        ranked.sort(key=lambda x: (x[0], x[1]))
+
+        notes, selected = [], {}
+        if ranked:
+            capexes = [c for c, _, _ in ranked]
+            median_capex = float(pd.Series(capexes).median())
+            selected["median"] = min(ranked, key=lambda x: (abs(x[0] - median_capex), x[0], x[1]))[2]
+            if capexes[0] != capexes[-1]:
+                selected["min"] = ranked[0][2]
+                selected["max"] = next(r for c, _, r in ranked if c == capexes[-1])
+        else:
+            selected["median"] = records[0]
+            notes.append(f"no valid capex in any record, row built from record {records[0].record_id}")
+
+        categories = {r.category for r in records if r.category is not None}
+        if len(categories) > 1:
+            notes.append(f"records disagree on category: {sorted(categories)}")
+
+        carried = {f: next((getattr(r, f) for r in records if getattr(r, f) is not None), None)
+                   for f in CARRIED_FIELDS}
+        for stat, rec in selected.items():
+            rows.append({"tech_id": f"{tech_id}_{stat}", "base_tech_id": tech_id, "statistic": stat,
+                         "source_record_id": rec.record_id, "n_records": len(records),
+                         "n_with_capex": len(ranked), **carried,
+                         **{f: _valid_value(rec, f) for f in RECORD_FIELDS}})
+
+        audit[tech_id] = {
+            "n_records": len(records), "n_with_capex": len(ranked),
+            "selected": {s: rec.record_id for s, rec in selected.items()},
+            # fom is derived and an empty degression_exponent just means the default was used -> not listed
+            "empty": {s: [f for f in RECORD_FIELDS if f not in ("fom", "degression_exponent")
+                          and _valid_value(rec, f) is None] for s, rec in selected.items()},
+            "no_capex": [r.record_id for r in records
+                         if _valid_value(r, "capex") is None and r.raw.get("capex") is None],
+            "capex_failed": [r.record_id for r in records
+                             if _valid_value(r, "capex") is None and r.raw.get("capex") is not None],
+            "notes": notes,
+        }
+    return pd.DataFrame(rows), audit
+
+
+def print_aggregation_audit(audit: dict) -> None:
+    """Compact console summary of step 8. Delete this function and its call in main() to remove it."""
+    for tech_id, a in audit.items():
+        sel = " ".join(f"{s}=rec{i}" for s, i in a["selected"].items())
+        empty = "; ".join(f"{s}: {','.join(fs)}" for s, fs in a["empty"].items() if fs)
+        print(f"[step 8] {tech_id}: {a['n_records']} rec, {a['n_with_capex']} with capex | {sel}"
+              + (f" | EMPTY {empty}" if empty else "")
+              + (f" | NO CAPEX rec {a['no_capex']} (unused)" if a["no_capex"] else "")
+              + (f" | CAPEX FAILED rec {a['capex_failed']} (unused)" if a["capex_failed"] else "")
+              + "".join(f" | NOTE {n}" for n in a["notes"]))
 
 def get_technology(technologies: list[Technology], tech_id: str) -> Optional[Technology]:
     """
@@ -559,6 +807,123 @@ def technologies_to_df(technologies: list[Technology]) -> pd.DataFrame:
     # in the flattened row (rebased/escalated/scaled capex, fom, efficiencies, ...)
     raise NotImplementedError
 
+# ---------------------------------------------------------------------------
+# Cost development function using CEPCI Index
+# ---------------------------------------------------------------------------
+
+def cepci_escalate(cepci_df: pd.DataFrame, cost_base: float,
+                    cepci_base_year, cepci_target_year) -> Optional[float]:
+    """
+    Chemical Engineering Plant Cost Index escalation: rescale cost_base
+    (given in cepci_base_year terms) to cepci_target_year terms.
+    Takes the already-loaded cepci_df (sheet 'cepci_index') rather than
+    reading the input file itself, so it can be called once per technology
+    without re-reading the Excel file every time.
+    Returns None (and prints a note) if either year isn't covered by the
+    CEPCI table.
+    """
+    base_match = cepci_df.loc[cepci_df["year"] == cepci_base_year]
+    target_match = cepci_df.loc[cepci_df["year"] == cepci_target_year]
+    if base_match.empty:
+        print(f"[cepci_escalate] No CEPCI value found for base year {cepci_base_year}.")
+        return None
+    if target_match.empty:
+        print(f"[cepci_escalate] No CEPCI value found for target year {cepci_target_year}.")
+        return None
+
+    cepci_base = base_match["cepci_value"].item()
+    cepci_target = target_match["cepci_value"].item()
+    if cepci_base <= 0:
+        raise ValueError("cepci_base must be > 0")
+    return cost_base * (cepci_target / cepci_base)
+
+# ---------------------------------------------------------------------------
+# Economy of scale function
+# ---------------------------------------------------------------------------
+
+def size_scale(cost_base: float, scale_base: float, scale_design: float,
+               degression_exponent: float) -> float:
+    # applying economy of scale effects to a TOTAL cost
+    # Cost_design = Cost_base * (Scale_design / Scale_base) ** d
+
+    if scale_base <= 0:
+        raise ValueError("scale_base must be > 0")
+    if scale_design <= 0:
+        raise ValueError("scale_design must be > 0")
+    return cost_base * (scale_design / scale_base) ** degression_exponent
+
+# ---------------------------------------------------------------------------
+# Data preparation and export functions
+# ---------------------------------------------------------------------------
+
+def add_unit_columns(df: pd.DataFrame, field_units: dict) -> pd.DataFrame:
+    """Insert a unit column directly after every column listed in field_units."""
+    out = pd.DataFrame(index=df.index)
+    for col in df.columns:
+        out[col] = df[col]
+        if col in field_units:
+            out[UNIT_COLUMN_NAMES.get(col, f"{col}_unit")] = field_units[col]
+    return out
+
+
+def build_techno_economic_sheet(aggregated_df: pd.DataFrame) -> pd.DataFrame:
+    """Step 9, sheet 1: aggregated data, self-describing (reference year and capacity basis)."""
+    df = aggregated_df.drop(columns=EFFICIENCY_COLUMNS)
+    i = df.columns.get_loc("capex") + 1
+    df.insert(i, "capex_ref_year", TARGET_YEAR)
+    df.insert(i + 1, "capex_scale_base", TARGET_CAPACITY_MW)
+    return add_unit_columns(df, FIELD_UNITS)
+
+
+def build_model_input_table(aggregated_df: pd.DataFrame,
+                            commodity_efficiencies_df: pd.DataFrame) -> pd.DataFrame:
+    """Step 10: one row per tech_id variant (_median/_min/_max); efficiencies repeat per variant."""
+    el_rows = commodity_efficiencies_df[(commodity_efficiencies_df["commodity"] == "el")
+                                        & (commodity_efficiencies_df["direction"] == "input")
+                                        & (commodity_efficiencies_df["flow_type"] == "energy")]
+    el_sum = el_rows.groupby("tech_id")["amount_per_unit_output"].sum(min_count=1)
+
+    table = pd.DataFrame({
+        "tech_id": aggregated_df["tech_id"],
+        "invest_cost": aggregated_df["capex"],
+        "full_load_hours": aggregated_df["full_load_hours"],
+        "lifetime": aggregated_df["lifetime_years"],
+        "efficiency_material": aggregated_df["efficiency_material"],
+        "efficiency_energetic": aggregated_df["efficiency_energetic"],
+        "fom_factor": aggregated_df["fom_factor"],
+        "electricity_consumption": aggregated_df["base_tech_id"].map(el_sum),  # empty if no el input
+    })
+    return add_unit_columns(table, MODEL_INPUT_UNITS)
+
+
+def export_to_excel(aggregated_df: pd.DataFrame, commodity_efficiencies_df: pd.DataFrame,
+                    out_dir: str) -> str:
+    """Steps 9 and 10: write technology_data_output.xlsx with three sheets."""
+    if aggregated_df.empty:
+        print("[export] Nothing to export: aggregated dataset is empty.")
+        return ""
+    os.makedirs(out_dir, exist_ok=True)
+    file_path = os.path.join(out_dir, "technology_data_output.xlsx")
+
+    base_ids = set(aggregated_df["base_tech_id"])
+    orphans = set(commodity_efficiencies_df["tech_id"].dropna()) - base_ids
+    if orphans:
+        print(f"[export] commodity_efficiencies has tech_ids without a technologies record "
+              f"(not exported): {sorted(orphans)}")
+    # exported once per technology; joins to the other sheets via base_tech_id
+    eff_out = (commodity_efficiencies_df[commodity_efficiencies_df["tech_id"].isin(base_ids)]
+               .rename(columns={"tech_id": "base_tech_id"}))
+    # per-technology efficiency results go on this sheet only (same value on every row of a technology)
+    eff_summary = aggregated_df.drop_duplicates("base_tech_id").set_index("base_tech_id")[EFFICIENCY_COLUMNS]
+    eff_out = add_unit_columns(eff_out.join(eff_summary, on="base_tech_id"), {"energy_losses": ENERGY_RATIO_UNIT})
+
+    with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
+        build_techno_economic_sheet(aggregated_df).to_excel(writer, sheet_name="techno_economic_data", index=False)
+        eff_out.to_excel(writer, sheet_name="commodity_efficiencies", index=False)
+        build_model_input_table(aggregated_df, commodity_efficiencies_df).to_excel(
+            writer, sheet_name="model_input", index=False)
+    print(f"[export] Written: {file_path}")
+    return file_path
 
 def main():
     """""
@@ -592,6 +957,7 @@ def main():
         "cepci_index": cepci_df,
     }
 
+    check_efficiency_duplicates(commodity_efficiencies_df)
     technologies = build_technologies(technologies_df, commodity_efficiencies_df)
 
     # --- step 2: unify units ---
@@ -602,12 +968,22 @@ def main():
         tech.check_stoichiometry()
         tech.compute_efficiency_energetic()
         tech.compute_efficiency_material()
-    # --- step 4: correct capex reference basis (TODO) ---
-    # --- step 5: CEPCI escalation to TARGET_YEAR (TODO) ---
-    # --- step 6: capacity scaling to TARGET_CAPACITY_MW (TODO) ---
-    # --- step 7: FOM calculation (TODO) ---
-    # --- step 8: aggregation across duplicate tech_ids (TODO) ---
-    # --- step 9/10: export (TODO) ---
+    # --- step 4: cancelled - CAPEX input/output basis correction is handled manually ---
+    # --- step 5: CEPCI escalation to TARGET_YEAR ---
+    for tech in technologies:
+        tech.escalate_capex(cepci_df)
+    # --- step 6: capacity scaling to TARGET_CAPACITY_MW ---
+    for tech in technologies:
+        tech.scale_capex()
+    # --- step 7: FOM calculation ---
+    for tech in technologies:
+        tech.compute_fom()
+    # --- step 8: aggregation across records of the same tech_id ---
+    aggregated_df, aggregation_audit = aggregate_technologies(technologies)
+    sheets["aggregated"] = aggregated_df                # keeps main()'s return signature unchanged
+    print_aggregation_audit(aggregation_audit)          # optional: comment out or delete
+    # --- step 9/10: export ---
+    export_to_excel(aggregated_df, commodity_efficiencies_df, output_path)
 
     STOP = time.perf_counter()
     print('Total execution time of script', round((STOP - START), 1), 's')

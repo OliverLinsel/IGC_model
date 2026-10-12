@@ -213,7 +213,8 @@ def relationship_visualisation(base, rfm_sweep_list, case_study, output_path=Non
     for rfm in rfm_values:
         sub = combined_df[combined_df["rfm"] == rfm].sort_values("alliance_index")
         fig.add_trace(go.Scatter(
-            x=sub["alliance_index"], y=sub["vom_multiplier"],
+            x=sub["alliance_index"], y=sub["" \
+            "vom_multiplier"],
             mode="markers",
             marker=dict(size=6, color=color_map[rfm], opacity=1.0,
                          line=dict(width=1, color=color_map[rfm])),
@@ -253,6 +254,153 @@ def relationship_visualisation(base, rfm_sweep_list, case_study, output_path=Non
     fig.write_html(os.path.join(output_path, "figures", f"relationship_vom_multiplier_sens_{case_study}.html"), include_plotlyjs="cdn")
 
     return fig, combined_df
+
+def alliance_overlap_distribution_visualisation(
+    base,
+    case_study,
+    output_path=None,
+    include_zero=True,
+    log_y=True,
+    max_bins=40):
+    """
+    Two adjacent histograms of the raw alliance-overlap measures per country pair:
+      left  : `counter`       -- number of alliances a pair shares
+      right : `shared_weight` -- summed weight of the shared alliances
+ 
+    Parameters
+    ----------
+    base : dict (as returned by build_relationship_base()) or the base_df itself
+    case_study : str, used in title / file names
+    output_path : str, defaults to <script_dir>/output
+    include_zero : bool
+        Pairs sharing no alliance are usually the largest group and can dwarf
+        everything else. Set False to plot only pairs with overlap > 0.
+    log_y : bool
+        Log-scale the y-axis (recommended: the distributions are heavily skewed).
+    max_bins : int
+        Upper limit on histogram bins for `shared_weight` (continuous weights).
+ 
+    Also marks the maximum and the 95th percentile of the non-zero shared_weight
+    on the right plot: the max is the denominator of the current alliance_index,
+    so the gap between the two lines shows how much the max-normalisation
+    compresses the bulk of pairs.
+ 
+    Returns
+    -------
+    fig : plotly Figure
+    """
+    FONT_FAMILY = "Times New Roman"
+    FONT_COLOR = "black"
+ 
+    if output_path is None:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        output_path = os.path.join(script_dir, "output")
+ 
+    base_df = base["base_df"] if isinstance(base, dict) else base
+    df = base_df[["counter", "shared_weight"]].copy()
+ 
+    n_total = len(df)
+    n_zero = int((df["shared_weight"] == 0).sum())
+    nonzero_w = df.loc[df["shared_weight"] > 0, "shared_weight"]
+    w_max = nonzero_w.max()
+    w_p95 = nonzero_w.quantile(0.95)
+ 
+    if not include_zero:
+        df = df[df["shared_weight"] > 0]
+ 
+    # --- left: counter (integer-valued -> one bar per value) ---
+    counter_counts = df["counter"].astype(int).value_counts().sort_index()
+ 
+    # --- right: shared_weight (binned; one bar per value if few unique values) ---
+    w = df["shared_weight"]
+    if w.nunique() <= max_bins:
+        w_counts = w.value_counts().sort_index()
+        w_x, w_y = w_counts.index.to_numpy(dtype=float), w_counts.values
+        w_width = (np.diff(w_x).min() * 0.9) if len(w_x) > 1 else 0.9
+    else:
+        edges = np.histogram_bin_edges(w, bins="auto")
+        if len(edges) - 1 > max_bins:
+            edges = np.linspace(w.min(), w.max(), max_bins + 1)
+        w_y, edges = np.histogram(w, bins=edges)
+        w_x = (edges[:-1] + edges[1:]) / 2
+        w_width = np.diff(edges) * 0.95
+ 
+    # one figure, two side-by-side panels built from two x/y axis pairs (x/y and x2/y2)
+    fig = go.Figure()
+ 
+    fig.add_trace(go.Bar(
+        x=counter_counts.index, y=counter_counts.values,
+        xaxis="x", yaxis="y",
+        marker=dict(color="#1b9e77", line=dict(width=1, color="black")),
+        name="counter",
+        hovertemplate="Shared alliances: %{x}<br>Pairs: %{y}<extra></extra>",
+    ))
+ 
+    fig.add_trace(go.Bar(
+        x=w_x, y=w_y, width=w_width,
+        xaxis="x2", yaxis="y2",
+        marker=dict(color="#d95f02", line=dict(width=1, color="black")),
+        name="shared_weight",
+        hovertemplate="Shared weight: %{x:.2f}<br>Pairs: %{y}<extra></extra>",
+    ))
+ 
+    # reference lines (and labels) on the shared_weight panel
+    for val, label, dash, y_lab in [(w_p95, f"95th pct (non-zero) = {w_p95:.2f}", "dash", 0.97),
+                                    (w_max, f"max = {w_max:.2f}", "dot", 0.89)]:
+        fig.add_shape(type="line", x0=val, x1=val, y0=0, y1=1,
+                      xref="x2", yref="y2 domain",
+                      line=dict(color="black", width=1.5, dash=dash))
+        fig.add_annotation(x=val, y=y_lab, xref="x2", yref="y2 domain",
+                           text=label, showarrow=False, xanchor="right", xshift=-4,
+                           font=dict(family=FONT_FAMILY, size=11, color=FONT_COLOR))
+ 
+    # panel titles (placed manually in paper coordinates)
+    for x_pos, text in [(0.225, "Shared alliances per pair (counter)"),
+                        (0.775, "Summed weight of shared alliances (shared_weight)")]:
+        fig.add_annotation(x=x_pos, y=1.0, xref="paper", yref="paper", text=text,
+                           showarrow=False, yanchor="bottom",
+                           font=dict(family=FONT_FAMILY, size=14, color=FONT_COLOR))
+ 
+    axis_font = dict(family=FONT_FAMILY, size=14, color=FONT_COLOR)
+    tick_font = dict(family=FONT_FAMILY, size=12, color=FONT_COLOR)
+    y_type = "log" if log_y else "linear"
+ 
+    fig.update_layout(
+        xaxis=dict(domain=[0.0, 0.45], anchor="y", dtick=1,
+                   title=dict(text="Number of shared alliances", font=axis_font),
+                   tickfont=tick_font, showgrid=True, gridcolor="lightgrey"),
+        yaxis=dict(domain=[0.0, 1.0], anchor="x", type=y_type,
+                   title=dict(text="Number of country pairs", font=axis_font),
+                   tickfont=tick_font, showgrid=True, gridcolor="lightgrey"),
+        xaxis2=dict(domain=[0.55, 1.0], anchor="y2",
+                    title=dict(text="Summed alliance weight", font=axis_font),
+                    tickfont=tick_font, showgrid=True, gridcolor="lightgrey"),
+        yaxis2=dict(domain=[0.0, 1.0], anchor="x2", type=y_type,
+                    title=dict(text="Number of country pairs", font=axis_font),
+                    tickfont=tick_font, showgrid=True, gridcolor="lightgrey"),
+    )
+ 
+    zero_note = (f"{n_zero} of {n_total} pairs ({n_zero / n_total:.0%}) share no alliance"
+                 + ("" if include_zero else " (excluded from plots)"))
+    fig.update_layout(
+        title=dict(
+            text=f"Distribution of alliance overlap across region pairs ({case_study})"
+                 f"<br><sup>{zero_note}</sup>",
+            font=dict(family=FONT_FAMILY, size=18, color=FONT_COLOR),
+        ),
+        showlegend=False,
+        bargap=0.05,
+        font=dict(family=FONT_FAMILY, color=FONT_COLOR),
+        plot_bgcolor="white", paper_bgcolor="white",
+        width=1400, height=700,
+        margin=dict(t=130),
+    )
+ 
+    os.makedirs(os.path.join(output_path, "figures"), exist_ok=True)
+    fig.write_image(os.path.join(output_path, "figures", f"alliance_overlap_distribution_{case_study}.png"), scale=4)
+    fig.write_html(os.path.join(output_path, "figures", f"alliance_overlap_distribution_{case_study}.html"), include_plotlyjs="cdn")
+ 
+    return fig
 
 def relationship_distribution_visualisation(base, rfm_sweep_list, case_study, output_path=None, n_points=300):
     FONT_FAMILY = "Times New Roman"
@@ -380,6 +528,9 @@ if __name__ == "__main__":
         sheet_name="relations",
         index=False,
     )
+
+    print("Plotting alliance overlap distribution")
+    alliance_overlap_distribution_visualisation(base, case_study)
 
     print("Plotting relationship sensitivity")
     relationship_visualisation(base, relationship_factor_magnitude_sens_list, case_study)

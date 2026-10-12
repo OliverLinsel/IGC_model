@@ -299,7 +299,7 @@ def plot_supply_composition(model, ds, data_1D, data_2D, mtd, mid, rfm, referenc
 
     prod["source"] = reference_region
     prod["transport_cost"] = 0
-    prod["relationship_penalty"] = 0
+    prod["relationship_risk_premium"] = 0
     prod["kind"] = "Local"
 
     # ----- imports -----
@@ -323,25 +323,25 @@ def plot_supply_composition(model, ds, data_1D, data_2D, mtd, mid, rfm, referenc
             data_2D["transport_cost"].to_dataframe("transport_cost").reset_index(),
             on=["region1", "region2", "commodity", "scenario"],
         )
-        # add relationship penalty bar by recalculating the cost component from price and vom_multiplier
+        # add relationship risk premium bar by recalculating the cost component from price and vom_multiplier
         imp = imp.merge(
             data_2D["vom_multiplier"].to_dataframe("vom_multiplier").reset_index(),
             on=["region1", "region2", "commodity", "scenario"],
         )
-        imp["relationship_penalty"] = imp["production_cost"] * (imp["vom_multiplier"] - 1)
+        imp["relationship_risk_premium"] = imp["production_cost"] * (imp["vom_multiplier"] - 1)
 
         imp["source"] = imp.region1
         imp["kind"] = "Import"
     else:
         imp = pd.DataFrame(columns=[
-            "source", "quantity", "production_cost", "transport_cost", "relationship_penalty", "kind", "supply_step"
+            "source", "quantity", "production_cost", "transport_cost", "relationship_risk_premium", "kind", "supply_step"
         ])
 
     # ----- stack -----
-    cols = ["source", "quantity", "production_cost", "transport_cost", "relationship_penalty", "kind", "supply_step"]
+    cols = ["source", "quantity", "production_cost", "transport_cost", "relationship_risk_premium", "kind", "supply_step"]
     stack = pd.concat([prod[cols], imp[cols]], ignore_index=True)
 
-    stack["delivered_cost"] = stack.production_cost + stack.relationship_penalty + stack.transport_cost
+    stack["delivered_cost"] = stack.production_cost + stack.relationship_risk_premium + stack.transport_cost
     stack["quantity"] = stack["quantity"] / MWH_TO_TWH
     stack = stack.sort_values("delivered_cost")
     stack["end"] = stack.quantity.cumsum()
@@ -352,19 +352,19 @@ def plot_supply_composition(model, ds, data_1D, data_2D, mtd, mid, rfm, referenc
 
     colors = {"Local": "tab:blue", "Import": "tab:orange"}
     transport_threshold = 1e-6
-    penalty_threshold = 1e-6
+    risk_premium_threshold = 1e-6
 
     for _, r in stack.iterrows():
         ax.bar(r.start, r.production_cost, width=r.quantity, align="edge", color=colors[r.kind])
 
-        has_penalty = r.relationship_penalty > penalty_threshold
+        has_risk_premium = r.relationship_risk_premium > risk_premium_threshold
         stacked_bottom = r.production_cost
-        if has_penalty:
+        if has_risk_premium:
             ax.bar(
-                r.start, r.relationship_penalty, width=r.quantity, align="edge",
+                r.start, r.relationship_risk_premium, width=r.quantity, align="edge",
                 bottom=stacked_bottom, color="purple", alpha=0.5,
             )
-            stacked_bottom += r.relationship_penalty
+            stacked_bottom += r.relationship_risk_premium
 
         has_transport = r.transport_cost > transport_threshold
         if has_transport:
@@ -374,8 +374,8 @@ def plot_supply_composition(model, ds, data_1D, data_2D, mtd, mid, rfm, referenc
             )
 
         txt = f"{r.source}\n{r.supply_step}\nQ={r.quantity:.1f}\nP={r.production_cost:.1f}"
-        if has_penalty:
-            txt += f"\nR={r.relationship_penalty:.1f}"
+        if has_risk_premium:
+            txt += f"\nR={r.relationship_risk_premium:.1f}"
         if has_transport:
             txt += f"\nT={r.transport_cost:.1f}"
         txt += f"\nΣ={r.delivered_cost:.1f}"
@@ -419,7 +419,7 @@ def plot_supply_composition(model, ds, data_1D, data_2D, mtd, mid, rfm, referenc
     legend = ax.legend(handles=[
         Patch(color="tab:blue", label="Domestic Production"),
         Patch(color="tab:orange", label="Import"),
-        Patch(color="purple", alpha=0.5, label="Relationship Penalty"),
+        Patch(color="purple", alpha=0.5, label="Relationship Risk Premium"),
         Patch(color="red", label="Transport Costs"),
         Line2D([0], [0], color="green", lw=2, ls=":", label="Marginal Price"),
         Line2D([0], [0], color="black", lw=2, ls="--", label="Demand"),
