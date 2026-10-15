@@ -601,3 +601,5 @@ if __name__ == "__main__":
  
     run(hs=args.hs, years=YEARS_TEST if args.test else YEARS_LIST, flow=args.flow,
         level=args.level, force_refresh=args.refresh, with_map=not args.no_map, show=args.show)
+
+## AI statement: During the preparation of this work the author(s) used Claude in order to develop software tools used in this publication. After using this tool/service, the authors reviewed and edited the content as needed and take full responsibility for the content of the published article.

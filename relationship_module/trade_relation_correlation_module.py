@@ -328,3 +328,5 @@ if __name__ == "__main__":
     run_correlation(a.hs, a.variants, a.years, metric=a.metric, pair_norm=a.pair_norm,
                     missing_trade=a.missing_trade, scenarios=a.scenario,
                     highlight_pairs=a.highlight, show=a.show)
+
+## AI statement: During the preparation of this work the author(s) used Claude in order to develop software tools used in this publication. After using this tool/service, the authors reviewed and edited the content as needed and take full responsibility for the content of the published article.
