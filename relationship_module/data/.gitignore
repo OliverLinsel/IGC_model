@@ -1,0 +1,5 @@
+*.xlsx
+*.json
+*.csv
+
+!country_centroids.csv
