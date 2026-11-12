@@ -26,7 +26,7 @@ default_simplify_tolerance = 1000 #in meters, tolerance for simplifying the rout
 
 #define case study
 case_study = "igc_nrw"
-case_study = "h2bb"
+# case_study = "h2bb"
 
 START = time.perf_counter() 
 
@@ -94,7 +94,7 @@ print(str(sources_data_gdf) + "\n")
 #Cut routing template to geoscope
 routing_template_op_gdf = gpd.clip(routing_template_gdf, work_geoscope_gdf_agg)
 routing_template_op_gdf = routing_template_op_gdf.explode(index_parts=False).reset_index(drop=True)
-visualize_routing_template(routing_template_op_gdf)
+visualize_routing_template(routing_template_op_gdf, case_study, 1)
 
 # clean the network in scope
 def clean_grid_template(gdf):
@@ -147,7 +147,7 @@ def clean_grid_template(gdf):
 
 clean_gdf = clean_grid_template(routing_template_op_gdf)
 clean_gdf = clean_gdf.explode(index_parts=False).reset_index(drop=True)
-visualize_routing_template(clean_gdf)
+visualize_routing_template(clean_gdf, case_study, 1)
 
 ##### create connections from the prepared sources to the clean template and return the connections as well as the combined gdf ####
 
@@ -225,8 +225,8 @@ def connect_nodes_to_template(sources_data_op_gdf, routing_template_op_gdf):
 
 connections_gdf, routing_template_op_gdf = connect_nodes_to_template(sources_data_gdf, clean_gdf)
 
-visualize_routing_template(connections_gdf)
-visualize_routing_template(routing_template_op_gdf)
+visualize_routing_template(connections_gdf, case_study, 1)
+visualize_routing_template(routing_template_op_gdf, case_study, 1)
 
 def calculate_length(gdf):
     if gdf.crs is None:
@@ -472,7 +472,7 @@ filtered_sources_df = sources_data_gdf[sources_data_gdf["scenario"] != "E"]
 # filtered_sources_df = filtered_sources_df.head(5).reset_index(drop=True)
 
 paths_gdf = dijkstra_connect_sources(G, filtered_sources_df)
-visualize_routing_template(paths_gdf)
+visualize_routing_template(paths_gdf, case_study, 1)
 
 def plot_mst(W, sources_data_op_out_gdf, routing_template_op_gdf, figures_dir):
     # Set the font to Times New Roman

@@ -61,6 +61,9 @@ figures_path = os.path.join(output_path, "figures")
 results_path = os.path.join(output_path, "results")
 for _p in (raw_path, figures_path, results_path):
     os.makedirs(_p, exist_ok=True)
+
+# ---- paste into trade_analysis_module.py (replaces the previous plot_flow_map) ----
+PATHS_FILE = os.path.join(project_root, "econ_module", "output", "model", "paths.csv")
  
 # --------------------------------------------------------------------------- #
 # Configuration
@@ -72,7 +75,7 @@ DATA_ENDPOINT = f"{BASE_URL}/data/v1/get/C/A/HS"            # needs subscription
 PREVIEW_ENDPOINT = f"{BASE_URL}/public/v1/preview/C/A/HS"   # no key, max 500 rows
  
 
-HS_SELECTION = 10 #10, 27   # default HS chapter(s) / code(s); change here or pass hs=... / --hs
+HS_SELECTION = 27 #10, 27   # default HS chapter(s) / code(s); change here or pass hs=... / --hs
 HS_LEVEL = 4        # 2 = chapter total only, 4 = headings, 6 = subheadings
  
 # cmdCode="10" alone only returns the chapter total, so the sub-codes are requested explicitly.
@@ -474,73 +477,372 @@ def country_centroids() -> dict[str, tuple[float, float]]:
     return {r.iso3: (r.lon, r.lat) for r in c.itertuples()}
  
  
-def plot_flow_map(
-    df: pd.DataFrame,
-    year: int | None = None,
-    top_n: int = 100,
-    commodity: str | None = None,
-    html_path: str | None = None,
-    title_prefix: str = "Trade flows",
-):
-    """
-    Interactive world map (plotly, `pip install plotly`): countries shaded by total
-    origin volume, lines for the top-N bilateral flows with width ~ volume.
-    """
-    import plotly.graph_objects as go
+# def plot_flow_map(
+#     df: pd.DataFrame,
+#     year: int | None = None,
+#     top_n: int = 100,
+#     commodity: str | None = None,
+#     html_path: str | None = None,
+#     title_prefix: str = "Trade flows",
+# ):
+#     """
+#     Interactive world map (plotly, `pip install plotly`): countries shaded by total
+#     origin volume, lines for the top-N bilateral flows with width ~ volume.
+#     """
+#     import plotly.graph_objects as go
  
+#     d = df
+#     if "flow" in d.columns and d["flow"].nunique() > 1:   # flow="both" -> use exporter-reported
+#         d = d[d["flow"] == "X"]
+#     if year is not None:
+#         d = d[d["year"] == year]
+#     if commodity is not None:
+#         d = d[d["commodity"] == commodity]
+ 
+#     totals = d.groupby("origin")["trade_volume"].sum() / 1e6
+#     flows = (d.groupby(["origin", "destination"], as_index=False)["trade_volume"].sum()
+#                .nlargest(top_n, "trade_volume"))
+ 
+#     cent = country_centroids()
+#     missing = set(flows["origin"]).union(flows["destination"]) - set(cent)
+#     if missing:
+#         print(f"No coordinates for {sorted(missing)} - those flows are skipped on the map.")
+ 
+#     fig = go.Figure(go.Choropleth(
+#         locations=totals.index, z=totals.values, colorscale="Blues",
+#         marker_line_width=0.3, colorbar=dict(title="Origin volume<br>(Mt)"),
+#         hovertemplate="%{location}: %{z:.2f} Mt<extra></extra>"))
+ 
+#     vmax = flows["trade_volume"].max()
+#     for r in flows.itertuples():
+#         if r.origin not in cent or r.destination not in cent:
+#             continue
+#         (lo0, la0), (lo1, la1) = cent[r.origin], cent[r.destination]
+#         fig.add_trace(go.Scattergeo(
+#             lon=[lo0, lo1], lat=[la0, la1], mode="lines+markers",
+#             line=dict(width=0.8 + 6 * r.trade_volume / vmax, color="rgba(214,39,40,0.55)"),
+#             marker=dict(size=[0, 5], color="rgb(214,39,40)"),
+#             hovertemplate=f"{r.origin} -> {r.destination}: {r.trade_volume / 1e6:.2f} Mt<extra></extra>",
+#             showlegend=False))
+ 
+#     fig.update_layout(title=f"{title_prefix} ({year or 'all years'}"
+#                             f"{', HS' + commodity if commodity else ''})",
+#                       height=650, margin=dict(l=0, r=0, t=50, b=0),
+#                       geo=dict(projection_type="natural earth", showframe=False,
+#                                showcountries=True, countrycolor="lightgrey"))
+#     if html_path:
+#         fig.write_html(html_path)
+#         print(f"Saved map: {html_path}")
+#     return fig
+
+def _iso(region) -> str:
+    """'AF-AGO' -> 'AGO'"""
+    return str(region).split("-")[-1]
+
+
+def load_paths(paths_file: str = PATHS_FILE) -> pd.DataFrame:
+    """paths.csv -> one row per directed pair: origin, destination (ISO3), geometry (shapely), path_cost, path_efficiency."""
+    from shapely import wkt
+
+    p = pd.read_csv(paths_file, usecols=["source", "sink", "path_cost", "path_geometry", "path_efficiency"])
+    p["origin"], p["destination"] = p["source"].map(_iso), p["sink"].map(_iso)
+    p["geometry"] = p["path_geometry"].map(wkt.loads)
+    p = p.drop(columns="path_geometry")
+    dup = p.duplicated(["origin", "destination"], keep=False)
+    if dup.any():
+        print(f"NOTE: {int(dup.sum())} rows in paths.csv share an ISO3 pair - keeping the cheapest path.")
+        p = p.sort_values("path_cost").drop_duplicates(["origin", "destination"])
+    return p
+
+
+def _reverse_geom(g):
+    try:
+        return g.reverse()                                   # shapely >= 2.0
+    except AttributeError:
+        from shapely.geometry import LineString
+        return LineString(list(g.coords)[::-1])
+
+
+def _filter_trade(df: pd.DataFrame, year: int | None, commodity: str | None) -> pd.DataFrame:
     d = df
-    if "flow" in d.columns and d["flow"].nunique() > 1:   # flow="both" -> use exporter-reported
+    if "flow" in d.columns and d["flow"].nunique() > 1:      # flow="both" -> use exporter-reported
         d = d[d["flow"] == "X"]
     if year is not None:
         d = d[d["year"] == year]
     if commodity is not None:
         d = d[d["commodity"] == commodity]
- 
-    totals = d.groupby("origin")["trade_volume"].sum() / 1e6
-    flows = (d.groupby(["origin", "destination"], as_index=False)["trade_volume"].sum()
-               .nlargest(top_n, "trade_volume"))
- 
-    cent = country_centroids()
-    missing = set(flows["origin"]).union(flows["destination"]) - set(cent)
-    if missing:
-        print(f"No coordinates for {sorted(missing)} - those flows are skipped on the map.")
- 
-    fig = go.Figure(go.Choropleth(
-        locations=totals.index, z=totals.values, colorscale="Blues",
-        marker_line_width=0.3, colorbar=dict(title="Origin volume<br>(Mt)"),
-        hovertemplate="%{location}: %{z:.2f} Mt<extra></extra>"))
- 
-    vmax = flows["trade_volume"].max()
-    for r in flows.itertuples():
-        if r.origin not in cent or r.destination not in cent:
+    return d
+
+
+def merge_paths_onto_trade(df: pd.DataFrame, year: int | None = None, commodity=None,
+                           paths: pd.DataFrame | None = None, paths_file: str = PATHS_FILE,
+                           verbose: bool = True) -> pd.DataFrame:
+    """
+    One row per directed trade pair (all selected commodities summed) with the transport route attached:
+    origin, destination, trade_volume, [trade_value_usd], source, sink, path_cost, path_efficiency,
+    geometry, has_path, reversed.
+    Matching: origin->destination path first; if only the opposite direction exists in paths.csv,
+    that path is used in reverse (reversed=True). Pairs without any path get has_path=False.
+    """
+    d = _filter_trade(df, year, commodity)
+    vals = [c for c in ("trade_volume", "trade_value_usd") if c in d.columns]
+    flows = d.groupby(["origin", "destination"], as_index=False)[vals].sum()
+    flows = flows[flows["trade_volume"] > 0]
+    paths = load_paths(paths_file) if paths is None else paths
+
+    direct = flows.merge(paths, on=["origin", "destination"], how="inner")
+    direct["reversed"] = False
+
+    rev_paths = paths.rename(columns={"origin": "destination", "destination": "origin",
+                                      "source": "sink", "sink": "source"})
+    done = set(zip(direct["origin"], direct["destination"]))
+    rest = flows[[k not in done for k in zip(flows["origin"], flows["destination"])]]
+    rev = rest.merge(rev_paths, on=["origin", "destination"], how="inner")
+    rev["geometry"] = rev["geometry"].map(_reverse_geom)
+    rev["reversed"] = True
+
+    matched = pd.concat([direct, rev], ignore_index=True)
+    done = set(zip(matched["origin"], matched["destination"]))
+    none = flows[[k not in done for k in zip(flows["origin"], flows["destination"])]].copy()
+    none["reversed"] = False
+
+    out = pd.concat([matched.assign(has_path=True), none.assign(has_path=False)], ignore_index=True)
+    out = out.sort_values("trade_volume", ascending=False).reset_index(drop=True)
+
+    if verbose and len(out):
+        share = out.loc[out["has_path"], "trade_volume"].sum() / out["trade_volume"].sum()
+        print(f"Paths merged: {int(out['has_path'].sum()):,} of {len(out):,} trade pairs have a route "
+              f"({int(out['reversed'].sum()):,} via reversed path), covering {share:.1%} of trade volume.")
+        if len(none):
+            top = none.nlargest(8, "trade_volume")
+            print("  Largest pairs without route:",
+                  ", ".join(f"{o}->{t}" for o, t in zip(top["origin"], top["destination"])))
+    return out
+
+def plot_flow_map(
+    df: pd.DataFrame,
+    year: int | None = None,
+    top_n: int | None = None,
+    commodity=None,
+    commodity_names: dict | None = None,
+    html_path: str | None = None,
+    png_path: str | None = None,
+    title_prefix: str = "Trade flows",
+    projection_type: str = "natural earth",
+    shared_scale: bool = False,
+    global_volume_min: float | None = None,
+    global_volume_max: float | None = None,
+    paths_file: str = PATHS_FILE,
+    unmatched: str = "skip",
+    return_merged: bool = False,
+):
+    """
+    Interactive world map (plotly). The dropdown switches between "All commodities" and each single
+    commodity code (e.g. 2709, 2710, 2711): countries shaded by origin volume (YlGn), the top-N
+    bilateral flows of the selection drawn along the routes from paths.csv, coloured (Rainbow, log
+    scale) and sized by volume.
+
+    commodity:        optional pre-filter (code or list, prefix match); the dropdown then only offers these
+    commodity_names:  {code: description} for the dropdown labels
+    shared_scale:     False = every selection has its own colour/width scale (best readability);
+                      True  = one common scale across all selections (comparable between commodities)
+    global_volume_min/max (tonnes): fixed bounds that override the scale (e.g. to compare several maps)
+    unmatched:        pairs without a route: "skip" (default) or "straight" (dashed centroid line)
+    return_merged:    also return the merged trade+route dataframe (column `selection`) -> (fig, merged)
+    """
+    import numpy as np
+    import plotly.graph_objects as go
+    import plotly.colors as pc
+
+    FONT_FAMILY, FONT_COLOR, LABEL_SIZE, TICK_SIZE = "Times New Roman", "black", 14, 12
+
+    d = _filter_trade(df, year, commodity)
+    d = d.assign(commodity=d["commodity"].astype(str))
+    names = commodity_names or {}
+    codes = sorted(d["commodity"].unique())
+    paths = load_paths(paths_file)
+    cent = country_centroids() if unmatched == "straight" else {}
+
+    selections = [(f"{c} {names.get(c, '')}".strip(), c) for c in codes]
+    if len(codes) > 1:
+        selections.insert(0, ("All commodities", None))
+
+    # ---- prepare data for every dropdown selection ----
+    prepared, skipped = [], 0
+    for label, code in selections:
+        dd = d if code is None else d[d["commodity"] == code]
+        merged = merge_paths_onto_trade(dd, paths=paths, verbose=(code is None))
+        totals = dd.groupby("origin")["trade_volume"].sum() / 1e6          # Mt
+        if merged.empty or totals.sum() <= 0:
+            print(f"Skipping '{label}': no trade volume.")
             continue
-        (lo0, la0), (lo1, la1) = cent[r.origin], cent[r.destination]
+        n_no_route = int((~merged["has_path"]).sum())
+        fl = merged[merged["has_path"]] if unmatched == "skip" else merged   # drop route-less pairs BEFORE top_n
+        fl = (fl.head(top_n) if top_n else fl).sort_values("trade_volume").reset_index(drop=True)
+        skipped += n_no_route        # biggest lines drawn last
+        if unmatched == "skip":
+            skipped += int((~fl["has_path"]).sum())
+            fl = fl[fl["has_path"]].reset_index(drop=True)
+        prepared.append(dict(label=label, code=code, totals=totals, flows=fl, merged=merged))
+    if prepared:
+        p0 = prepared[0]
+        print(f"Map '{p0['label']}': {len(p0['merged']):,} trade pairs, "
+              f"{int(p0['merged']['has_path'].sum()):,} with a route in paths.csv, "
+              f"{len(p0['flows']):,} drawn (top_n={top_n}, unmatched='{unmatched}').")
+    if not prepared:
+        raise ValueError("Nothing to plot - no commodity has trade volume for this selection.")
+
+    # ---- colour/width scale ----
+    def log_bounds(frames):
+        v = np.log1p(np.concatenate([f["trade_volume"].values.astype(float) for f in frames]))
+        return (np.nanmin(v), np.nanmax(v)) if len(v) else (0.0, 1.0)
+
+    if shared_scale:
+        shared = log_bounds([p["flows"] for p in prepared if len(p["flows"])])
+
+    fig = go.Figure()
+    group_idx, route_count = {}, 0
+    for sel_i, p in enumerate(prepared):
+        vis, idxs = (sel_i == 0), []
+        totals, fl = p["totals"], p["flows"]
+
+        # country shading: origin volume of this selection
+        vmin, vmax = totals.min(), totals.max()
+        fig.add_trace(go.Choropleth(
+            locations=totals.index, z=totals.values, locationmode="ISO-3", colorscale="YlGn",
+            marker_line_color="white", marker_line_width=0.5, zmin=vmin, zmax=vmax,
+            colorbar=dict(
+                title=dict(text="", font=dict(family=FONT_FAMILY, size=LABEL_SIZE, color=FONT_COLOR)),
+                len=0.4, thickness=10, x=0.9, y=0.5, xanchor="left",
+                tickvals=[vmin, vmax], ticktext=[f"{vmin:.1f}", f"{vmax:.1f}"],
+                tickfont=dict(family=FONT_FAMILY, size=TICK_SIZE, color=FONT_COLOR)),
+            hovertemplate="%{location}: %{z:.2f} Mt<extra></extra>",
+            name="Origin volume", showlegend=False, visible=vis))
+        idxs.append(len(fig.data) - 1)
+
+        node_coords = {}
+        if len(fl):
+            amounts = fl["trade_volume"].values.astype(float)
+            log_amounts = np.log1p(amounts)
+            amin, amax = shared if shared_scale else (np.nanmin(log_amounts), np.nanmax(log_amounts))
+            if global_volume_min is not None:
+                amin = np.log1p(global_volume_min)
+            if global_volume_max is not None:
+                amax = np.log1p(global_volume_max)
+            norm = np.clip((log_amounts - amin) / (amax - amin + 1e-12), 0, 1)
+            widths = 1 + 5 * norm
+            colors = pc.sample_colorscale("Rainbow", norm.tolist())
+
+            for r, w, color in zip(fl.itertuples(), widths, colors):
+                if r.has_path:
+                    lines = list(r.geometry.geoms) if r.geometry.geom_type == "MultiLineString" else [r.geometry]
+                    lon, lat = [], []
+                    for k, ln in enumerate(lines):
+                        xs, ys = ln.xy
+                        if k:
+                            lon.append(None), lat.append(None)
+                        lon += list(xs)
+                        lat += list(ys)
+                    dash = "solid"
+                    extra = f"<br>path cost: {r.path_cost:.3g}<br>efficiency: {r.path_efficiency:.3f}"
+                else:                                                       # unmatched == "straight"
+                    if r.origin not in cent or r.destination not in cent:
+                        continue
+                    lon = [cent[r.origin][0], cent[r.destination][0]]
+                    lat = [cent[r.origin][1], cent[r.destination][1]]
+                    dash, extra = "dash", "<br>(no route in paths.csv)"
+                node_coords.setdefault(r.origin, (lon[0], lat[0]))
+                node_coords.setdefault(r.destination, (lon[-1], lat[-1]))
+                fig.add_trace(go.Scattergeo(
+                    lon=lon, lat=lat, mode="lines+markers",
+                    line=dict(width=w, color=color, dash=dash),
+                    marker=dict(size=[0] * (len(lon) - 1) + [5], color=color),   # dot at destination = direction
+                    showlegend=False, hoverinfo="text", opacity=0.8, visible=vis,
+                    text=f"{r.origin} → {r.destination}<br>{p['label']}"
+                         f"<br>volume: {r.trade_volume / 1e6:.3g} Mt{extra}"))
+                idxs.append(len(fig.data) - 1)
+                route_count += 1
+
+            tick_vals = np.linspace(amin, amax, 5)
+            tick_text = [f"{v / 1e6:.2g}" for v in np.expm1(tick_vals)]
+            fig.add_trace(go.Scattergeo(
+                lon=[None], lat=[None], mode="markers",
+                marker=dict(size=0.1, color=[amin, amax], colorscale="Rainbow", cmin=amin, cmax=amax,
+                            colorbar=dict(
+                                title=dict(text="", font=dict(family=FONT_FAMILY, size=LABEL_SIZE, color=FONT_COLOR)),
+                                len=0.4, thickness=10, x=0.98, y=0.5, xanchor="left",
+                                tickvals=tick_vals, ticktext=tick_text,
+                                tickfont=dict(family=FONT_FAMILY, size=TICK_SIZE, color=FONT_COLOR)),
+                            showscale=True),
+                showlegend=False, hoverinfo="skip", visible=vis))
+            idxs.append(len(fig.data) - 1)
+
+        names_n = sorted(node_coords)
         fig.add_trace(go.Scattergeo(
-            lon=[lo0, lo1], lat=[la0, la1], mode="lines+markers",
-            line=dict(width=0.8 + 6 * r.trade_volume / vmax, color="rgba(214,39,40,0.55)"),
-            marker=dict(size=[0, 5], color="rgb(214,39,40)"),
-            hovertemplate=f"{r.origin} -> {r.destination}: {r.trade_volume / 1e6:.2f} Mt<extra></extra>",
-            showlegend=False))
- 
-    fig.update_layout(title=f"{title_prefix} ({year or 'all years'}"
-                            f"{', HS' + commodity if commodity else ''})",
-                      height=650, margin=dict(l=0, r=0, t=50, b=0),
-                      geo=dict(projection_type="natural earth", showframe=False,
-                               showcountries=True, countrycolor="lightgrey"))
+            lon=[node_coords[n][0] for n in names_n], lat=[node_coords[n][1] for n in names_n],
+            mode="markers", marker=dict(size=6, color="darkblue"), name="Nodes",
+            text=names_n, hoverinfo="text", showlegend=False, visible=vis))
+        idxs.append(len(fig.data) - 1)
+        group_idx[p["label"]] = idxs
+
+    annotations = [
+        dict(text=label, xref="paper", yref="paper", x=x_pos - 0.03, y=0.5, xanchor="center",
+             yanchor="middle", textangle=-90, showarrow=False,
+             font=dict(family=FONT_FAMILY, size=LABEL_SIZE - 1, color=FONT_COLOR))
+        for x_pos, label in zip([0.9, 0.98], ["Origin volume (Mt)", "Trade volume (Mt)"])]
+
+    # ---- dropdown: switch between commodities ----
+    def title_for(label):
+        return f"{title_prefix} ({year or 'all years'}) – {label}"
+
+    n_traces = len(fig.data)
+    buttons = []
+    for p in prepared:
+        vis = [False] * n_traces
+        for i in group_idx[p["label"]]:
+            vis[i] = True
+        buttons.append(dict(label=p["label"], method="update",
+                            args=[{"visible": vis}, {"title.text": title_for(p["label"])}]))
+
+    fig.update_layout(
+        updatemenus=[dict(buttons=buttons, direction="down", x=0.01, y=0.98, xanchor="left", yanchor="top",
+                          showactive=True, pad=dict(t=0, r=0),
+                          font=dict(family=FONT_FAMILY, size=TICK_SIZE, color=FONT_COLOR))],
+        annotations=annotations)
+    fig.update_geos(
+        projection_type=projection_type, showland=True, landcolor="lightgrey",
+        showocean=True, oceancolor="lightblue", showcountries=True, countrycolor="white",
+        showcoastlines=True, coastlinecolor="white", domain=dict(x=[0, 0.85], y=[0, 1]))
+    fig.update_layout(
+        title=dict(text=title_for(prepared[0]["label"]),
+                   font=dict(family=FONT_FAMILY, size=LABEL_SIZE + 2, color=FONT_COLOR),
+                   y=0.98, yanchor="top", automargin=True),
+        height=700, width=1300, font=dict(family=FONT_FAMILY, size=TICK_SIZE, color=FONT_COLOR),
+        showlegend=False, margin=dict(t=40, b=0, l=20, r=90))
+
     if html_path:
-        fig.write_html(html_path)
-        print(f"Saved map: {html_path}")
+        fig.write_html(html_path, include_plotlyjs="cdn")
+        print(f"Saved map: {html_path}  ({len(prepared)} selections, {route_count:,} route traces)")
+        if png_path is None:
+            png_path = os.path.splitext(html_path)[0] + ".png"
+    if png_path:
+        try:
+            fig.write_image(png_path, scale=2)      # static export = first selection ("All commodities")
+            print(f"Saved static map: {png_path}")
+        except Exception as e:                                       # noqa: BLE001
+            print(f"PNG export failed ({e}). Install kaleido: pip install --upgrade \"kaleido>=1\"")
+    if return_merged:
+        return fig, pd.concat([p["merged"].assign(selection=p["label"]) for p in prepared], ignore_index=True)
     return fig
- 
  
 # --------------------------------------------------------------------------- #
 # Batch figure export
 # --------------------------------------------------------------------------- #
 def make_all_figures(df: pd.DataFrame, group: str, commodity_names: dict | None = None,
-                     with_map: bool = True, show: bool = False):
+                     with_map: bool = True, show: bool = False, map_top_n: int | None = None):
     """Per year and flow: top exporters, heatmap, map. Plus one time series per flow."""
     import matplotlib.pyplot as plt
- 
+
     flows = sorted(df["flow"].unique()) if "flow" in df.columns else ["X"]
     for f in flows:
         d = df[df["flow"] == f] if "flow" in df.columns else df
@@ -553,8 +855,8 @@ def make_all_figures(df: pd.DataFrame, group: str, commodity_names: dict | None 
                                save_path=fp("top_exporters.png"))
             # plot_flow_heatmap(dy, year=y, save_path=fp("flow_heatmap.png"))
             if with_map:
-                plot_flow_map(dy, year=y, html_path=fp("flow_map.html"),
-                              title_prefix=f"{group} flows")
+                plot_flow_map(dy, year=y, top_n=map_top_n, commodity_names=commodity_names,
+                              html_path=fp("flow_map.html"), title_prefix=f"{group} flows")
             if not show:
                 plt.close("all")
         if len(years) > 1:

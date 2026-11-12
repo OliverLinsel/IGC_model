@@ -239,40 +239,10 @@ def calculate_relationship_factor(base, relationship_factor_magnitude: float, va
     """
     Compute the relationship-factor / vom_multiplier table at a given rfm ceiling,
     for one or several alliance-index variants at once.
- 
+
         vom_multiplier_<variant>_ij = relationship_factor_magnitude ** (1 - alliance_index_<variant>_ij)
- 
-    so vom_multiplier is exactly 1 for the best-connected pair (alliance_index = 1,
-    exponent = 0) and exactly relationship_factor_magnitude (rfm) for a pair
-    sharing no alliance at all (alliance_index = 0, exponent = 1) -- interpolating
-    smoothly on a power curve in between. This is the single, final scaling
-    applied to transport costs downstream (trading_module.py consumes
-    vom_multiplier directly, with no further rfm scaling applied there) -- so
-    rfm should be swept here, at this layer, and nowhere else.
- 
-    Pairs flagged `at_war` are overridden to inf (infeasible route) regardless
-    of alliance_index -- treated as a hard constraint rather than folded into
-    the alliance curve, so trading_module.py can filter those out
-    (`rel_df.vom_multiplier < np.inf`) rather than mistaking a war override
-    for a legitimately weak alliance score.
- 
-    Parameters
-    ----------
-    base : dict (as returned by build_relationship_base()) or the base_df itself
-    relationship_factor_magnitude : float
-        The rfm sensitivity parameter. Must be > 1. This is the single
-        parameter to sweep in the sensitivity analysis -- it is not
-        reapplied anywhere downstream.
-    variants_to_consider : str, list of str or None
-        Alliance-index variant(s) to calculate, e.g. "total_max" or
-        ["total_max", "regional_max", "category_max"]. None -> all available.
- 
-    Returns
-    -------
-    DataFrame[region1, region2, counter, shared_weight,
-              alliance_index_<variant> ..., vom_multiplier_<variant> ...,
-              scenario], sorted by the vom_multiplier of the first variant.
     """
+    
     if relationship_factor_magnitude < 1:
         raise ValueError(f"relationship_factor_magnitude must be > 1, got {relationship_factor_magnitude}")
  
@@ -293,6 +263,8 @@ def calculate_relationship_factor(base, relationship_factor_magnitude: float, va
     rel_df["scenario"] = scenario
     rel_df = rel_df.sort_values(f"vom_multiplier_{variants[0]}").reset_index(drop=True)
     rel_df = rel_df.rename(columns={"country": "region1", "friends": "region2"})
+    #Selecting the relationship weight variant for the modelling:
+    rel_df[["alliance_index", "vom_multiplier"]] = rel_df[["alliance_index_total_max", "vom_multiplier_total_max"]]
     rel_df = rel_df.drop(columns={"at_war", "continent", "pairing"})
     return rel_df
 
@@ -658,7 +630,7 @@ def relationship_distribution_visualisation(base, rfm_sweep_list, case_study, ou
         for rfm in rfm_values:
             vom = combined_df.loc[combined_df["rfm"] == rfm, vom_col]
             vom = vom[vom < 10]
-            n_points_in_subset = len(vom)
+            n_points_in_subset = len(vom) #!
  
             # panel assignment + one legend entry per rfm (not per panel)
             panel_kwargs = dict(xaxis=f"x{suffix}", yaxis=f"y{suffix}",
@@ -669,7 +641,7 @@ def relationship_distribution_visualisation(base, rfm_sweep_list, case_study, ou
                 # Plot a vertical line at the constant value
                 fig.add_trace(go.Scatter(
                     x=[vom.iloc[0]] * 2,
-                    y=[0, n_points_in_subset],  # Use actual count for constant case
+                    y=[0, n_points_in_subset/2],  # Use actual count for constant case
                     mode="lines",
                     line=dict(color=color_map[rfm], width=2, dash="dot"),
                     name=f"rfm = {rfm} (constant)",

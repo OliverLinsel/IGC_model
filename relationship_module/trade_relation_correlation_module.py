@@ -266,7 +266,6 @@ def plot_scatter(merged: pd.DataFrame, summary: pd.DataFrame, variants, hs_codes
     if show:
         plt.show()
 
-
 def run_correlation(hs_codes=HS_CODES, alliance_variants=ALLIANCE_VARIANTS, years=TRADE_YEARS,
                     flow: str = TRADE_FLOW, metric: str = TRADE_METRIC, pair_norm: str = PAIR_NORM,
                     missing_trade: str = MISSING_TRADE, scenarios=SCENARIOS,

@@ -903,6 +903,7 @@ def analyse_results(output_path, runs):
     # Initialize empty lists to store the data
     hhi_data_list = []
     cost_data_list = []
+    volume_data_list = []
 
     # Iterate through each run in the runs list
     for run in runs:
@@ -931,12 +932,17 @@ def analyse_results(output_path, runs):
             "mid": mid,
             "total_system_costs": total_system_costs
         })
+        volume_data_list.append({
+            "mtd": mtd, "mid": mid,
+            "total_traded_volume": float(model.variables["v_transport"].solution.sum()),
+        })
 
     # Create DataFrames from the lists
     hhi_df = pd.DataFrame(hhi_data_list)
     cost_df = pd.DataFrame(cost_data_list)
+    total_traded_volume_df = pd.DataFrame(volume_data_list)
 
-    return hhi_df, cost_df
+    return hhi_df, cost_df, total_traded_volume_df
 
 # def plot_hhi_sens(hhi_df, low_thresh=None, high_thresh=None):
 #     """
@@ -1240,6 +1246,343 @@ def plot_cost_sens_multi(cost_dfs, rfm_values, currency_unit="€", raw_unit_sca
     fig.savefig(os.path.join(output_path, "figures", f"cost_multi_rfm_{rfm_str}.png"))
     plt.close('all')
     return fig, ax
+
+def plot_traded_volume_sens_multi(volume_dfs, rfm_values, value_col="total_traded_volume",
+                                  unit="TWh", raw_unit_scale=1e6):
+    """
+    Plot 3D surfaces of total traded volume as a function of
+    max_total_dependence (mtd) and max_indiv_dependence (mid),
+    one surface per rfm value.
+
+    volume_dfs: list of DataFrames (one per rfm value) with columns
+        "mtd", "mid" and `value_col` (raw values in MWh by default).
+    """
+    sorted_rfm = sorted(rfm_values)
+    colors = plt.cm.cividis(np.linspace(0.15, 0.9, len(sorted_rfm)))
+
+    pivots = [
+        df.pivot(index="mtd", columns="mid", values=value_col).sort_index().sort_index(axis=1)
+        / raw_unit_scale
+        for df in volume_dfs
+    ]
+    zmin = min(np.nanmin(p.values) for p in pivots)
+    zmax = max(np.nanmax(p.values) for p in pivots)
+
+    fig = plt.figure(figsize=(14, 12))
+    ax = fig.add_subplot(111, projection="3d")
+
+    for i, (p, color) in enumerate(zip(pivots, colors)):
+        X, Y = np.meshgrid(p.columns.values, p.index.values)
+        ax.plot_surface(X, Y, p.values, color=color, edgecolor="k",
+                        linewidth=0.3, alpha=0.7, zorder=10 - i)
+
+    legend_elements = [plt.Rectangle((0, 0), 1, 1, fc=c, label=f"rfm={r:.2f}")
+                       for r, c in zip(sorted_rfm, colors)]
+
+    ax.zaxis.labelpad = 15
+    fig.subplots_adjust(right=0.85)
+    ax.set_xlabel("Max individual import dependence")
+    ax.set_ylabel("Max total import dependence")
+    ax.text2D(0.95, 0.82, f"Traded volume\n[{unit}]",
+              transform=ax.transAxes, ha="center", fontsize=12)
+    ax.set_title(f"Traded Volume Sensitivity (Multiple rfm Values) [{unit}]", fontsize=18)
+    ax.set_zlim(zmin - 0.05 * (zmax - zmin), zmax)
+    ax.legend(handles=legend_elements, loc="upper left", fontsize=9)
+    plt.tight_layout()
+
+    rfm_str = "_".join(f"{r*100:.0f}" for r in sorted_rfm)
+    fig.savefig(os.path.join(output_path, "figures", f"traded_volume_multi_rfm_{rfm_str}.png"))
+    plt.close("all")
+    return fig, ax
+
+def plot_heatmap_grid(rows, rfm_values, filename="heatmap_grid", cell_size=(4.2, 3.8)):
+    """
+    Heatmap grid over (mid, mtd): one column per rfm value, one row per metric.
+    Each row has its own shared colour scale and colourbar, so panels within
+    a row are directly comparable.
+
+    rows: list of dicts, one per row, with keys
+        "dfs"            list of DataFrames (one per rfm value, same order as rfm_values)
+                         with columns "mtd", "mid", value_col
+        "value_col"      column to plot
+        "cbar_label"     colourbar label
+        "raw_unit_scale" (optional, default 1.0) divisor for unit conversion
+        "fmt"            (optional, default ".0f") cell annotation format
+        "cmap"           (optional, default "viridis") colormap
+    """
+    sorted_rfm = sorted(rfm_values)
+    order = [rfm_values.index(r) for r in sorted_rfm]
+    nrows, ncols = len(rows), len(sorted_rfm)
+
+    fig, axes = plt.subplots(nrows, ncols,
+                             figsize=(cell_size[0] * ncols + 1.5, cell_size[1] * nrows),
+                             sharex=True, sharey=True, squeeze=False, layout="constrained")
+
+    for r, row in enumerate(rows):
+        scale = row.get("raw_unit_scale", 1.0)
+        fmt = row.get("fmt", ".0f")
+        cmap = row.get("cmap", "viridis")
+
+        pivots = [
+            row["dfs"][i].pivot(index="mtd", columns="mid", values=row["value_col"])
+            .sort_index().sort_index(axis=1) / scale
+            for i in order
+        ]
+        norm = plt.Normalize(min(np.nanmin(p.values) for p in pivots),
+                             max(np.nanmax(p.values) for p in pivots))
+
+        for c, (p, rfm) in enumerate(zip(pivots, sorted_rfm)):
+            ax = axes[r, c]
+            im = ax.imshow(p.values, origin="lower", cmap=cmap, norm=norm, aspect="auto")
+            ax.set_xticks(range(len(p.columns)))
+            ax.set_xticklabels([f"{x:.1f}" for x in p.columns])
+            ax.set_yticks(range(len(p.index)))
+            ax.set_yticklabels([f"{y:.1f}" for y in p.index])
+            if r == 0:
+                ax.set_title(f"rfm = {rfm:.2f}")
+
+            for (i, j), v in np.ndenumerate(p.values):
+                if not np.isnan(v):
+                    ax.text(j, i, format(v, fmt), ha="center", va="center", fontsize=9,
+                            color="white" if norm(v) < 0.5 else "black")
+
+        fig.colorbar(im, ax=axes[r, :].tolist(), label=row["cbar_label"], shrink=0.9)
+
+    fig.supxlabel("Max individual import dependence")
+    fig.supylabel("Max total import dependence")
+
+    rfm_str = "_".join(f"{r*100:.0f}" for r in sorted_rfm)
+    fig.savefig(os.path.join(output_path, "figures", f"{filename}_rfm_{rfm_str}.png"), dpi=300)
+    plt.close("all")
+    return fig, axes
+
+### Start gradient analysis for dependencies and rfm
+
+def _pivot(df, value_col, scale=1.0):
+    return (df.pivot(index="mtd", columns="mid", values=value_col)
+              .sort_index().sort_index(axis=1) / scale)
+
+
+def gradient_rows(row, step=0.1):
+    """Derive two gradient rows (along mtd, along mid) from a value row."""
+    base = row["cbar_label"]
+    common = {**row, "cmap": "RdBu_r", "fmt": ".1f", "step": step}
+    return [
+        {**common, "kind": "grad_mtd", "cbar_label": f"Δ {base}\nper +{step:.1f} max total dep."},
+        {**common, "kind": "grad_mid", "cbar_label": f"Δ {base}\nper +{step:.1f} max indiv. dep."},
+    ]
+
+
+def plot_heatmap_grid(rows, rfm_values, filename="heatmap_grid", cell_size=(4.2, 3.8),
+                      annotate=True, smooth=False):
+    """
+    Heatmap grid over (mid, mtd): one column per rfm value, one row per metric.
+    Each row has its own shared colour scale and colourbar.
+
+    rows: list of dicts with keys
+        "dfs", "value_col", "cbar_label"   (required; dfs ordered like rfm_values)
+        "raw_unit_scale" (1.0), "fmt" (".0f"), "cmap" ("viridis")
+        "kind": "value" (default), "grad_mtd" or "grad_mid"  (see gradient_rows)
+        "step": gradient step size (default 0.1)
+    annotate: print values in cells (switch off for dense grids)
+    smooth:   gouraud shading instead of flat cells (useful for dense grids)
+    """
+    sorted_rfm = sorted(rfm_values)
+    order = [rfm_values.index(r) for r in sorted_rfm]
+    nrows, ncols = len(rows), len(sorted_rfm)
+
+    fig, axes = plt.subplots(nrows, ncols,
+                             figsize=(cell_size[0] * ncols + 1.5, cell_size[1] * nrows),
+                             sharex=True, sharey=True, squeeze=False, layout="constrained")
+
+    for r, row in enumerate(rows):
+        kind = row.get("kind", "value")
+        fmt = row.get("fmt", ".0f")
+        cmap = row.get("cmap", "viridis")
+
+        mats = []
+        for i in order:
+            p = _pivot(row["dfs"][i], row["value_col"], row.get("raw_unit_scale", 1.0))
+            Z = p.values
+            if kind != "value":
+                # finite differences on the actual coordinates -> works for non-uniform grids
+                d_mtd, d_mid = np.gradient(Z, p.index.values, p.columns.values)
+                Z = (d_mtd if kind == "grad_mtd" else d_mid) * row.get("step", 0.1)
+            mats.append((p.columns.values, p.index.values, Z))
+
+        if kind == "value":
+            norm = plt.Normalize(min(np.nanmin(m[2]) for m in mats),
+                                 max(np.nanmax(m[2]) for m in mats))
+        else:  # symmetric scale centred on zero
+            m = max(np.nanmax(np.abs(m[2])) for m in mats) or 1.0
+            norm = plt.Normalize(-m, m)
+
+        for c, ((x, y, Z), rfm) in enumerate(zip(mats, sorted_rfm)):
+            ax = axes[r, c]
+            im = ax.pcolormesh(x, y, Z, cmap=cmap, norm=norm,
+                               shading="gouraud" if smooth else "nearest")
+            if len(x) <= 8:
+                ax.set_xticks(x)
+                ax.set_xticklabels([f"{v:.1f}" for v in x])
+            if len(y) <= 8:
+                ax.set_yticks(y)
+                ax.set_yticklabels([f"{v:.1f}" for v in y])
+            if r == 0:
+                ax.set_title(f"rfm = {rfm:.2f}")
+
+            if annotate:
+                for (i, j), v in np.ndenumerate(Z):
+                    if np.isnan(v):
+                        continue
+                    rgb = im.cmap(norm(v))[:3]
+                    lum = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+                    ax.text(x[j], y[i], format(v, fmt), ha="center", va="center",
+                            fontsize=9, color="white" if lum < 0.5 else "black")
+
+        fig.colorbar(im, ax=axes[r, :].tolist(), label=row["cbar_label"], shrink=0.9)
+
+    fig.supxlabel("Max individual import dependence")
+    fig.supylabel("Max total import dependence")
+
+    rfm_str = "_".join(f"{r*100:.0f}" for r in sorted_rfm)
+    fig.savefig(os.path.join(output_path, "figures", f"{filename}_rfm_{rfm_str}.png"), dpi=300)
+    plt.close("all")
+    return fig, axes
+
+
+def plot_rfm_sensitivity_summary(rows, rfm_values, filename="rfm_sensitivity_summary", step=0.1):
+    """
+    One row per metric, two panels each, showing how sensitivity develops with rfm:
+      left:  largest change vs. the unconstrained corner (max mtd, max mid) [%]
+      right: mean absolute gradient along mtd and mid [% of baseline per +step]
+    rows: same dicts as in plot_heatmap_grid (only dfs, value_col, cbar_label needed).
+    """
+    sorted_rfm = sorted(rfm_values)
+    order = [rfm_values.index(r) for r in sorted_rfm]
+    fig, axes = plt.subplots(len(rows), 2, figsize=(11, 4 * len(rows)),
+                             squeeze=False, layout="constrained")
+
+    for r, row in enumerate(rows):
+        largest, g_mtd, g_mid = [], [], []
+        for i in order:
+            p = _pivot(row["dfs"][i], row["value_col"])
+            rel = (p / p.values[-1, -1] - 1) * 100   # % vs. unconstrained corner
+            largest.append(rel.values.flat[np.nanargmax(np.abs(rel.values))])
+            d_mtd, d_mid = np.gradient(rel.values, p.index.values, p.columns.values)
+            g_mtd.append(np.nanmean(np.abs(d_mtd)) * step)
+            g_mid.append(np.nanmean(np.abs(d_mid)) * step)
+
+        axes[r, 0].plot(sorted_rfm, largest, "o-", color="tab:blue")
+        axes[r, 0].set_ylabel(f"{row['value_col']}\nlargest change vs. unconstrained [%]")
+        axes[r, 1].plot(sorted_rfm, g_mtd, "o-", label="along max total dep.")
+        axes[r, 1].plot(sorted_rfm, g_mid, "s--", label="along max indiv. dep.")
+        axes[r, 1].set_ylabel(f"mean |gradient| [% per +{step:.1f}]")
+        axes[r, 1].legend()
+        for ax in axes[r]:
+            ax.set_xlabel("Relationship factor magnitude (rfm)")
+            ax.grid(True, alpha=0.3)
+
+    rfm_str = "_".join(f"{r*100:.0f}" for r in sorted_rfm)
+    fig.savefig(os.path.join(output_path, "figures", f"{filename}_rfm_{rfm_str}.png"), dpi=300)
+    plt.close("all")
+    return fig, axes
+
+def _origin_mask(x, y):
+    """Boolean mask that is True only for the cell at mid = 0, mtd = 0."""
+    mask = np.zeros((len(y), len(x)), dtype=bool)
+    i, j = np.where(np.isclose(y, 0))[0], np.where(np.isclose(x, 0))[0]
+    if len(i) and len(j):
+        mask[i[0], j[0]] = True
+    return mask
+
+def plot_gradient_overlay(rows, rfm_values, step=0.1, cmap="YlOrRd", annotate=True,
+                          exclude_plateau=True, plateau_rtol=1e-6,
+                          filename="gradient_overlay", cell_size=(4.2, 3.8)):
+    """
+    Combined gradient magnitude over (mid, mtd): one column per rfm value, one row per metric.
+
+    Sensitivity = sqrt(d/d_mtd² + d/d_mid²) * step, in the row's own unit per +`step`.
+    The black outline encloses the region where sensitivity <= the row's tol.
+
+    exclude_plateau: grey out and exclude from the outline the cells that are connected to the
+        strictest corner (lowest mtd/mid) and have the same value as it, i.e. the region where
+        the constraints are so strict that the result no longer changes.
+
+    rows: list of dicts with keys
+        "dfs", "value_col", "cbar_label"   (required; dfs ordered like rfm_values)
+        "raw_unit_scale" (1.0), "fmt" (".1f")
+        "tol": tolerance in the row's unit per step (rows without it get no outline)
+    """
+    sorted_rfm = sorted(rfm_values)
+    order = [rfm_values.index(r) for r in sorted_rfm]
+    nrows, ncols = len(rows), len(sorted_rfm)
+
+    cmap_obj = plt.get_cmap(cmap).copy()
+    cmap_obj.set_bad("lightgrey")            # excluded plateau shows up grey
+
+    fig, axes = plt.subplots(nrows, ncols,
+                             figsize=(cell_size[0] * ncols + 1.5, cell_size[1] * nrows),
+                             sharex=True, sharey=True, squeeze=False, layout="constrained")
+
+    for r, row in enumerate(rows):
+        data = []
+        for i in order:
+            p = _pivot(row["dfs"][i], row["value_col"], row.get("raw_unit_scale", 1.0))
+            d_mtd, d_mid = np.gradient(p.values, p.index.values, p.columns.values)
+            g = np.hypot(d_mtd, d_mid) * step
+            plateau = _origin_mask(p.columns.values, p.index.values) if exclude_plateau \
+                else np.zeros(g.shape, dtype=bool)
+            data.append((p.columns.values, p.index.values, g, plateau))
+
+        norm = plt.Normalize(0, max(np.nanmax(g[~pl]) if (~pl).any() else 1.0
+                                    for _, _, g, pl in data))
+        tol = row.get("tol")
+        fmt = row.get("fmt", ".1f")
+
+        for c, ((x, y, g, plateau), rfm) in enumerate(zip(data, sorted_rfm)):
+            ax = axes[r, c]
+            g_plot = np.where(plateau, np.nan, g)
+            im = ax.pcolormesh(x, y, g_plot, cmap=cmap_obj, norm=norm, shading="nearest")
+
+            if tol is not None:
+                ok = ((g <= tol) & ~plateau).astype(float)
+                if 0 < ok.sum() < ok.size:   # contour needs a boundary to draw
+                    ax.contour(x, y, ok, levels=[0.5], colors="k", linewidths=2)
+
+            if annotate:
+                for (i, j), v in np.ndenumerate(g_plot):
+                    if np.isnan(v):
+                        continue
+                    rgb = im.cmap(norm(v))[:3]
+                    lum = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+                    ax.text(x[j], y[i], format(v, fmt), ha="center", va="center",
+                            fontsize=9, color="white" if lum < 0.5 else "black")
+
+            if len(x) <= 8:
+                ax.set_xticks(x); ax.set_xticklabels([f"{v:.1f}" for v in x])
+            if len(y) <= 8:
+                ax.set_yticks(y); ax.set_yticklabels([f"{v:.1f}" for v in y])
+            if r == 0:
+                ax.set_title(f"rfm = {rfm:.2f}")
+
+        suffix = f"  (outline: ≤ {tol:g})" if tol is not None else ""
+        fig.colorbar(im, ax=axes[r, :].tolist(), shrink=0.9,
+                     label=f"{row['cbar_label']}\nsensitivity per +{step:.1f}{suffix}")
+
+    if exclude_plateau:
+        axes[0, 0].legend(handles=[Patch(facecolor="lightgrey", edgecolor="grey",
+                                         label="unchanged plateau (excluded)")],
+                          loc="upper left", fontsize=8)
+
+    fig.supxlabel("Max individual import dependence")
+    fig.supylabel("Max total import dependence")
+
+    rfm_str = "_".join(f"{r*100:.0f}" for r in sorted_rfm)
+    fig.savefig(os.path.join(output_path, "figures", f"{filename}_rfm_{rfm_str}.png"), dpi=300)
+    plt.close("all")
+    return fig, axes
+
+### End gradient analysis for dependencies and rfm
 
 def _curly_brace_path(x, y0, y1, width, q=0.6):
     """
@@ -3020,7 +3363,7 @@ mtd_mid_runs = [
     r for r in all_runs
     if r["metadata"].get("relationship_factor_magnitude", 1.0) == 1.0
 ]
-hhi_df, cost_df = analyse_results(output_path, mtd_mid_runs)
+hhi_df, cost_df, total_traded_volume_df = analyse_results(output_path, mtd_mid_runs)
 
 # sanity check — contour/surface needs at least 2 unique values per axis
 unique_mtd = hhi_df["mtd"].nunique()
@@ -3083,10 +3426,12 @@ if len(rfm_values_to_plot) >= 2:  # Need at least 2 to show multiple surfaces
     # Generate DataFrames for each selected rfm
     hhi_dfs = []
     cost_dfs = []
+    total_traded_volume_dfs = []
     for rfm in rfm_values_to_plot:
-        hhi_df, cost_df = analyse_results(output_path, rfm_runs[rfm])
+        hhi_df, cost_df, total_traded_volume_df = analyse_results(output_path, rfm_runs[rfm])
         hhi_dfs.append(hhi_df)
         cost_dfs.append(cost_df)
+        total_traded_volume_dfs.append(total_traded_volume_df)
 
     # --- NEW: filter out any rfm whose mtd/mid grid is too small for a surface plot ---
     valid_indices = [
@@ -3100,12 +3445,40 @@ if len(rfm_values_to_plot) >= 2:  # Need at least 2 to show multiple surfaces
 
     hhi_dfs_filtered = [hhi_dfs[i] for i in valid_indices]
     cost_dfs_filtered = [cost_dfs[i] for i in valid_indices]
+    volume_dfs_filtered = [total_traded_volume_dfs[i] for i in valid_indices]
     rfm_values_filtered = [rfm_values_to_plot[i] for i in valid_indices]
 
     # Generate the multi-rfm plots (now using the filtered lists)
     if len(hhi_dfs_filtered) >= 1:
         plot_hhi_sens_multi(hhi_dfs_filtered, rfm_values_filtered)
         plot_cost_sens_multi(cost_dfs_filtered, rfm_values_filtered)
+        plot_traded_volume_sens_multi(volume_dfs_filtered, rfm_values_filtered)
+        ### plot as multi category rfm sensitivity heatmap
+        volume_row = dict(dfs=volume_dfs_filtered, value_col="total_traded_volume",
+                        cbar_label="Traded volume [TWh]", raw_unit_scale=1e6, fmt=".0f")
+        cost_row = dict(dfs=cost_dfs_filtered, value_col="total_system_costs",
+                        cbar_label="Total system costs [bn €]", raw_unit_scale=1e9, fmt=".0f")
+        ### volume + costs
+        plot_heatmap_grid([volume_row, cost_row], rfm_values_filtered, filename="volume_cost_heatmap")
+
+        ### Start gradient analysis for dependencies and rfm
+        volume_row = dict(dfs=volume_dfs_filtered, value_col="total_traded_volume",
+                  cbar_label="Traded volume [TWh]", raw_unit_scale=1e6, fmt=".1f")
+        cost_row = dict(dfs=cost_dfs_filtered, value_col="total_system_costs",
+                        cbar_label="Total system costs [bn €]", raw_unit_scale=1e9, fmt=".0f")
+
+        # values + gradients, one metric per figure to keep the grid readable
+        plot_heatmap_grid([volume_row, *gradient_rows(volume_row)], rfm_values_filtered, filename="volume_sens")
+        plot_heatmap_grid([cost_row, *gradient_rows(cost_row)], rfm_values_filtered, filename="cost_sens")
+
+        ### gradient analysis 
+        volume_row = dict(dfs=volume_dfs_filtered, value_col="total_traded_volume",
+                  cbar_label="Traded volume [TWh]", raw_unit_scale=1e6, tol=100)
+        cost_row = dict(dfs=cost_dfs_filtered, value_col="total_system_costs",
+                        cbar_label="Total system costs [bn €]", raw_unit_scale=1e9, tol=1.5)
+        plot_gradient_overlay([volume_row, cost_row], rfm_values_filtered)
+        ### End gradient analysis for dependencies and rfm
+
         # Generate the multi-rfm trade-off curve
         plot_trade_off_curve_multi(hhi_dfs_filtered, cost_dfs_filtered, rfm_values_filtered)
     else:

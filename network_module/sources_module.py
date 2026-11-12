@@ -13,7 +13,7 @@ from setup import get_system_path, get_ram_usage
 
 #delete after development
 case_study = "igc_nrw"
-case_study = "h2bb"
+# case_study = "h2bb"
 data_path = r".\data_module\Data"
 output_path = r"output"
 epsg="3035"
